@@ -55,11 +55,16 @@ async def ask_question(
     db: AsyncSession = Depends(get_db)
 ):
     """Ask the chatbot a question."""
+    import uuid
+    
+    # Auto-generate user_id if not provided (for easier testing)
+    user_id = request.user_id or str(uuid.uuid4())
+    
     try:
         result = await ChatbotService.ask(
             db=db,
             query=request.query,
-            user_id=request.user_id,
+            user_id=user_id,
             language=request.language or "en"
         )
         

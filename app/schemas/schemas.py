@@ -164,6 +164,13 @@ class SentimentRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=10000)
     content_id: Optional[str] = None
     content_type: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "I absolutely loved this event! The host was amazing and I learned so much."
+            }
+        }
 
 
 class SentimentResponse(BaseModel):
@@ -177,6 +184,14 @@ class KeywordRequest(BaseModel):
     """Request for keyword extraction."""
     text: str = Field(..., min_length=1, max_length=10000)
     max_keywords: Optional[int] = Field(10, ge=1, le=50)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "text": "Looking for photography workshops in downtown Chicago near the Art Institute. Interested in portrait and landscape photography.",
+                "max_keywords": 10
+            }
+        }
 
 
 class KeywordItem(BaseModel):
@@ -212,12 +227,20 @@ class TrendingTopicsResponse(BaseModel):
 # ============================================
 class ModerationRequest(BaseModel):
     """Request for content moderation."""
-    content_id: str
+    content_id: Optional[str] = None  # Auto-generated if not provided
     content_type: ContentType
     text: Optional[str] = None
     image_url: Optional[str] = None
     video_url: Optional[str] = None
     user_id: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "content_type": "text",
+                "text": "This is a great event! I really enjoyed it."
+            }
+        }
 
 
 class ModerationFlag(BaseModel):
@@ -256,8 +279,16 @@ class ModerationStatus(BaseModel):
 class ChatbotAskRequest(BaseModel):
     """Request to ask chatbot."""
     query: str = Field(..., min_length=1, max_length=2000)
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None  # Auto-generated if not provided
     language: Optional[str] = "en"
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "How do I create an event?",
+                "language": "en"
+            }
+        }
 
 
 class ChatbotAskResponse(BaseModel):
@@ -599,6 +630,16 @@ class AttendancePredictionRequest(BaseModel):
     location: Optional[str] = None
     capacity: Optional[int] = None
     host_id: Optional[str] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "event_date": "2025-12-25T14:00:00",
+                "category": "photography",
+                "location": "New York",
+                "capacity": 50
+            }
+        }
 
 
 class ConfidenceInterval(BaseModel):

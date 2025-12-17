@@ -27,6 +27,7 @@ from app.api.taxonomy import router as taxonomy_router
 from app.api.rewards import router as rewards_router
 from app.api.matching import router as matching_router
 from app.api.predictions import router as predictions_router
+from app.api.testing import router as testing_router
 
 # Configure logging
 logging.basicConfig(
@@ -169,6 +170,7 @@ app.include_router(taxonomy_router)
 app.include_router(rewards_router)
 app.include_router(matching_router)
 app.include_router(predictions_router)
+app.include_router(testing_router)
 
 
 # Root endpoint

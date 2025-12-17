@@ -49,10 +49,15 @@ async def moderate_content(
     db: AsyncSession = Depends(get_db)
 ):
     """Moderate content."""
+    import uuid
+    
+    # Auto-generate content_id if not provided (for easier testing)
+    content_id = request.content_id or str(uuid.uuid4())
+    
     try:
         result = await ModerationService.moderate_content(
             db=db,
-            content_id=request.content_id,
+            content_id=content_id,
             content_type=request.content_type,
             text=request.text,
             image_url=request.image_url,
