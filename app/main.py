@@ -1,6 +1,51 @@
 """
-Kumele AI/ML Backend API
-Main FastAPI application entry point.
+Kumele AI/ML Backend API - Main FastAPI Application Entry Point.
+
+=============================================================================
+KUMELE AI/ML BACKEND
+=============================================================================
+
+Production Server: http://104.248.178.34:8000
+
+Tech Stack:
+-----------
+- FastAPI 0.109.0: Async REST API framework
+- PostgreSQL: Primary database (async SQLAlchemy)
+- Redis: Caching and Celery queue
+- Qdrant: Vector database for RAG chatbot
+- HuggingFace: ML models (sentiment, embeddings, moderation)
+- LLM Chain: Internal TGI → Mistral API → OpenRouter (free fallback)
+
+API Sections (per 8-section requirements):
+------------------------------------------
+1. Matching & Recommendations (/match, /recommendations)
+2. Rewards System (/rewards) - rules-based
+3. Predictions (/predictions) - Prophet + sklearn
+4. Host Ratings (/rating) - 70% attendee + 30% system
+5. Ads Targeting (/ads) - demographics + behavioral
+6. NLP Processing (/nlp) - sentiment, keywords, trends
+7. Content Moderation (/moderation) - text + image
+8. Chatbot RAG (/chatbot) - multi-language Q&A
+9. Translation/i18n (/translate, /i18n) - lazy loading
+10. Support (/support) - email only, no live chat
+11. Dynamic Pricing (/pricing, /discount)
+12. Taxonomy (/taxonomy) - hobby categories
+13. AI Health (/ai/health) - system monitoring
+
+Environment Variables:
+----------------------
+- DATABASE_URL: PostgreSQL connection string
+- REDIS_URL: Redis connection string
+- QDRANT_URL: Qdrant vector DB URL
+- LLM_API_URL: Internal TGI endpoint (optional)
+- MISTRAL_API_KEY: Mistral API key (optional)
+- OPENROUTER_API_KEY: OpenRouter API key (optional, free)
+- HUGGINGFACE_API_KEY: HuggingFace model access
+
+Documentation:
+--------------
+- Swagger UI: /docs
+- ReDoc: /redoc
 """
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,57 +104,76 @@ app = FastAPI(
     description="""
     ## Comprehensive AI/ML Backend for Kumele Platform
     
-    ### Features
+    **Production URL**: http://104.248.178.34:8000
     
-    #### 🌟 Rating System
-    - Weighted 5-star host rating model
-    - 70% attendee rating + 30% system reliability
+    ### Architecture Overview
+    
+    - **Database**: PostgreSQL (async via SQLAlchemy)
+    - **Cache/Queue**: Redis (async)
+    - **Vector DB**: Qdrant (chatbot RAG)
+    - **ML Models**: HuggingFace Transformers
+    - **LLM Fallback Chain**: Internal TGI → Mistral API → OpenRouter (free)
+    
+    ### API Sections (per Requirements Spec)
+    
+    #### 3A. 🎯 Matching & Recommendations
+    - `/match/events` - Location + hobby similarity matching
+    - `/recommendations/events` - ML-based personalized recommendations
+    - `/recommendations/hobbies` - Hobby suggestions
+    - Supports cold start users, engagement weighting, reward tier boosting
+    
+    #### 3B. 🎁 Rewards System
+    - `/rewards/calculate` - Rules-based reward calculation
+    - `/rewards/points` - Check user points
+    - Tiers: none/bronze/silver/gold with boost percentages
+    
+    #### 3C. 📈 Predictions
+    - `/predictions/event` - Prophet + sklearn event predictions
+    - `/predictions/attendance` - Attendance forecasting
+    - `/predictions/revenue` - Revenue optimization
+    
+    #### 3D. ⭐ Host Ratings
+    - `/rating/event/{id}` - Submit rating (verified attendees only)
+    - `/rating/host/{id}` - Get host aggregate (70% attendee + 30% system)
     - Badge system for top performers
     
-    #### 🎯 Recommendations
-    - Personalized hobby recommendations
-    - Event recommendations based on user preferences
-    - Collaborative filtering + content-based hybrid
+    #### 3E. 📢 Ads Targeting
+    - `/ads/audience-match` - Find matching audience segments
+    - `/ads/predict-performance` - CTR/conversion prediction
+    - Demographics + interests + behavioral targeting
     
-    #### 📢 Advertising Intelligence
-    - Audience segment matching
-    - Ad performance prediction
-    - CTR and engagement forecasting
+    #### 3F. 📝 NLP Processing
+    - `/nlp/sentiment` - Sentiment analysis (-1.0 to +1.0)
+    - `/nlp/keywords` - TF-IDF + NER extraction
+    - `/nlp/trends` - Trending topic detection
     
-    #### 📝 NLP Services
-    - Sentiment analysis
-    - Keyword extraction
-    - Trend detection
+    #### 3G. 🛡️ Content Moderation
+    - `/moderation` - Text/image moderation
+    - `/moderation/job/{id}` - Async job status
+    - Scoring: 0-0.3 safe, 0.3-0.7 review, 0.7-1.0 reject
     
-    #### 🛡️ Content Moderation
-    - Text moderation (toxicity, hate, spam)
-    - Image moderation (nudity, violence)
-    - Video moderation with keyframe analysis
+    #### 3H. 🤖 Chatbot RAG
+    - `/chatbot/ask` - RAG-powered Q&A (multi-language)
+    - `/chatbot/sync` - Knowledge base sync
+    - Pipeline: Translate → Embed → Qdrant → LLM → Translate back
     
-    #### 🤖 Chatbot
-    - RAG-based knowledge Q&A
-    - Multi-language support
-    - Knowledge base sync
+    #### 3I. 🌐 Translation & i18n
+    - `/i18n/strings` - Lazy-loaded UI translations
+    - `/translate` - Dynamic content translation
+    - Languages: en, ar (RTL), fr, es, de, tr, he (RTL)
     
-    #### 🌐 Translation & i18n
-    - Real-time text translation
-    - UI string management
-    - 6 supported languages
+    #### 3J. ❤️ AI Health
+    - `/ai/health` - Full system health check
+    - Components: DB, Redis, Qdrant, LLM (3 providers), ML models
     
-    #### 📧 Support System
-    - AI-powered email routing
-    - Sentiment-based prioritization
-    - Auto-generated reply drafts
+    #### Additional
+    - `/taxonomy` - Hobby/interest taxonomy (source of truth)
+    - `/support` - Email-only support (no live chat)
+    - `/pricing` - Dynamic pricing optimization
     
-    #### 💰 Dynamic Pricing
-    - Price optimization
-    - Discount suggestions
-    - Time/demand-based pricing
-    
-    #### ❤️ System Health
-    - Comprehensive health checks
-    - Component monitoring
-    - System metrics
+    ### Authentication
+    All endpoints require valid JWT token in Authorization header.
+    Testing endpoints available at `/testing/*` for development.
     """,
     version="1.0.0",
     docs_url="/docs",

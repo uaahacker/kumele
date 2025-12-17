@@ -1,6 +1,46 @@
 """
 Recommendations API endpoints.
+
 Handles personalized hobby and event recommendations.
+
+=============================================================================
+RECOMMENDATION ENGINE (Section 3A of Requirements)
+=============================================================================
+
+Overview:
+Personalized recommendations using collaborative filtering + content-based
+approaches. Supports cold start users via demographic fallback.
+
+Algorithm:
+1. Cold Start (<5 interactions):
+   - Demographic-based (age, location, hobbies)
+   - Popular events nearby
+   - Diversity requirement (max 3 per category)
+
+2. Warm Users (5+ interactions):
+   - Collaborative: Similar users' preferences
+   - Content-based: Hobby profile matching
+   - Hybrid: 0.6 collab + 0.4 content
+
+Score Boosting:
+- Reward tier: none/bronze/silver/gold → 0/5/10/15%
+- Engagement weight (RSVPs, attendance, etc.)
+- Host rating factor
+- Recency decay
+
+Endpoints:
+- GET /recommendations/hobbies: Recommend hobbies
+- POST /recommendations/events: Recommend events
+- POST /recommendations/train: Trigger model training
+- GET /recommendations/cache: Cache status
+
+Key Difference from /match/events:
+- /match/events = Objective relevance (distance + hobby)
+- /recommendations/events = Predicted preference (ML model)
+
+Cache:
+- Results cached 1 hour per user
+- Invalidated on new interaction
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

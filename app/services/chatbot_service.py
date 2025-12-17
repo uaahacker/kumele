@@ -1,7 +1,54 @@
 """
 Chatbot Service for RAG-based Knowledge Base Q&A.
+
 Uses Qdrant for vector search and LLM for answer generation.
 Supports internal TGI, external Mistral API, and OpenRouter.
+
+RAG Pipeline (per requirements Section 3H):
+==============================================================================
+1. POST /chatbot/ask:
+   - Detect language (auto-detect using patterns)
+   - Translate query to English (if not English)
+   - Generate embedding for query (sentence-transformers)
+   - Search Qdrant for top-k relevant documents
+   - Build context from retrieved chunks
+   - Send context + query to LLM
+   - Generate answer using LLM
+   - Translate answer back to user's language (if needed)
+   - Log interaction to Postgres
+
+2. POST /chatbot/sync:
+   - Chunk content (~500 tokens with overlap)
+   - Generate embeddings for each chunk
+   - Upsert vectors into Qdrant
+   - Track document versions in Postgres
+
+3. POST /chatbot/feedback:
+   - Map user feedback to 'positive' or 'negative'
+   - Store in chatbot_logs table
+
+LLM Fallback Chain:
+==============================================================================
+1. Internal TGI (if LLM_API_URL configured)
+2. External Mistral API (if MISTRAL_API_KEY set)
+3. OpenRouter (FREE - if OPENROUTER_API_KEY set)
+
+Key Principle: LLM stays static. Only embeddings/docs update.
+
+Storage:
+==============================================================================
+- knowledge_documents: Document metadata (Postgres)
+- embeddings_metadata: Chunk tracking (Postgres)
+- chatbot_logs: Interaction logs (Postgres)
+- Document vectors: Qdrant collection
+
+Configuration:
+==============================================================================
+- EMBEDDING_MODEL: Model for generating embeddings
+- QDRANT_COLLECTION: Vector collection name
+- TOP_K: Number of documents to retrieve (default 5)
+- CHUNK_SIZE: Words per chunk (~500)
+- CHUNK_OVERLAP: Overlapping words between chunks (~50)
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession

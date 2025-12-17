@@ -1,6 +1,53 @@
 """
 Moderation Service for Content Moderation (Text + Image + Video).
+
 Handles toxicity, hate speech, NSFW detection.
+
+Moderation Pipeline (per requirements Section 3G):
+==============================================================================
+1. Text Moderation:
+   - HuggingFace toxic-bert model for toxicity scoring
+   - Hate speech detection using specialized model
+   - Profanity filter with regex patterns
+   - Multi-language support (translates to English first)
+
+2. Image Moderation:
+   - NSFW detection using clip-based classifier
+   - Face detection for privacy concerns
+   - Violence/gore detection
+   - Logo/watermark detection
+
+3. Video Moderation (future):
+   - Frame extraction at configurable intervals
+   - Run image moderation on frames
+   - Audio transcription + text moderation
+
+Scoring System:
+==============================================================================
+- 0.0 - 0.3: Safe (auto-approve)
+- 0.3 - 0.7: Review (manual moderation queue)
+- 0.7 - 1.0: Reject (auto-reject, flag for review)
+
+Thresholds (configurable via settings):
+- MODERATION_AUTO_APPROVE: 0.3
+- MODERATION_AUTO_REJECT: 0.7
+
+Job Status Flow:
+==============================================================================
+pending → processing → completed/failed
+                    ↘ needs_review (if score in gray zone)
+
+Async Processing:
+- Celery tasks for heavy moderation jobs
+- Redis queue for job management
+- Webhook callback on completion
+
+Key Endpoints:
+==============================================================================
+- POST /moderation/text: Moderate text content
+- POST /moderation/image: Moderate image content
+- POST /moderation/batch: Batch moderation job
+- GET /moderation/jobs/{job_id}: Check job status
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession

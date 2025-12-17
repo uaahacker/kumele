@@ -1,6 +1,26 @@
 """
 Pricing and Discount API endpoints.
+
 Handles dynamic pricing optimization and discount suggestions.
+
+Pricing Factors:
+- Time: Price adjusts as event date approaches (early bird → last minute)
+- Demand: Based on views, bookings, conversion rate
+- Seasonality: Month and day-of-week adjustments
+- Capacity: Current booking percentage
+
+Price Bounds:
+- Prices bounded to ±50% of base price
+- Prevents extreme price swings
+
+Discount Logic:
+- Low booking (<30%) → Suggest promotional discount
+- Last minute (<48h) → Special pricing
+- High demand (>85%) → No discount needed
+
+Storage:
+- pricing_history: Tracks all calculations
+- discount_suggestions: Recommended discounts
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

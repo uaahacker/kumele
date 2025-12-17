@@ -1,6 +1,61 @@
 """
 Ads Service for Advertising & Targeting Intelligence.
+
 Handles audience matching and performance prediction.
+
+Ads Pipeline (per requirements Section 3E):
+==============================================================================
+1. Audience Targeting:
+   - Demographic targeting (age, gender, location)
+   - Interest-based targeting (hobby categories)
+   - Behavioral targeting (past event attendance, engagement)
+   - Lookalike audiences (users similar to converters)
+
+2. Ad Performance Prediction:
+   - CTR (Click-Through Rate) prediction
+   - Conversion prediction (RSVP, attendance)
+   - Budget optimization recommendations
+   - Bid price suggestions
+
+3. Audience Segments:
+   - Pre-built segments (Active Users, Event Creators, etc.)
+   - Custom segments (admin-defined rules)
+   - Dynamic segments (auto-updated based on behavior)
+
+Targeting Criteria:
+==============================================================================
+- age_range: [min, max] age filter
+- gender: 'male', 'female', 'other', 'all'
+- location: {lat, lon, radius_km}
+- hobbies: list of hobby category IDs
+- engagement_level: 'low', 'medium', 'high'
+- event_attendance: min events attended
+
+Prediction Model Features:
+==============================================================================
+- User demographics
+- Historical engagement
+- Ad creative quality score
+- Time of day/week factors
+- Seasonal adjustments
+
+Performance Metrics:
+==============================================================================
+- impressions: Number of times ad shown
+- clicks: Number of clicks
+- ctr: clicks / impressions
+- conversions: RSVPs or purchases
+- conversion_rate: conversions / clicks
+- cost_per_click: spend / clicks
+- cost_per_conversion: spend / conversions
+- roas: return on ad spend
+
+Key Endpoints:
+==============================================================================
+- POST /ads/target: Match ad to audience segment
+- POST /ads/predict: Predict ad performance
+- GET /ads/segments: List available audience segments
+- POST /ads/log: Log ad impression/click
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession

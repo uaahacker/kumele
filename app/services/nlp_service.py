@@ -1,6 +1,53 @@
 """
 NLP Service for User-Generated Content Analysis.
+
 Handles sentiment analysis, keyword extraction, and trend detection.
+
+NLP Pipeline (per requirements Section 3F):
+==============================================================================
+1. Sentiment Analysis:
+   - HuggingFace distilbert-sst2 model
+   - Scores: negative (-1.0 to -0.3), neutral (-0.3 to 0.3), positive (0.3 to 1.0)
+   - Multi-language: auto-detect and translate to English
+
+2. Keyword Extraction:
+   - TF-IDF based extraction
+   - Named Entity Recognition (NER) for locations, events, people
+   - Configurable top-k keywords (default 10)
+
+3. Topic Classification:
+   - Zero-shot classification into predefined categories
+   - Categories: Sports, Music, Food, Travel, Tech, Art, Social, etc.
+   - Confidence threshold for assignment
+
+4. Trend Detection:
+   - Daily aggregation of keywords and topics
+   - Rolling window analysis (7-day, 30-day)
+   - Velocity scoring (rate of increase)
+   - Breakout detection (sudden spikes)
+
+Content Types Analyzed:
+==============================================================================
+- Posts (user-generated posts)
+- Comments (on events/posts)
+- Reviews (event reviews)
+- Chat messages (support/community)
+
+Storage:
+==============================================================================
+- ugc_content: Raw content store
+- nlp_sentiment: Sentiment scores per content
+- nlp_keyword: Extracted keywords
+- nlp_topic_daily: Daily topic aggregates
+- nlp_trend: Detected trends with metadata
+
+Key Endpoints:
+==============================================================================
+- POST /nlp/sentiment: Analyze sentiment of text
+- POST /nlp/keywords: Extract keywords from text
+- POST /nlp/topics: Classify text into topics
+- GET /nlp/trends: Get trending topics (daily/weekly)
+- POST /nlp/batch: Batch NLP processing job
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession

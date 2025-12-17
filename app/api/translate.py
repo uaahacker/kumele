@@ -1,6 +1,30 @@
 """
 Translation and i18n API endpoints.
-Handles text translation and UI string management.
+
+Handles UI string translations and dynamic text translation.
+
+Key Requirements (per spec):
+1. UI translations MUST be static i18n files (or approved translations served by API)
+2. NO runtime translating UI strings on every page load
+3. LibreTranslate/Argos allowed for:
+   - Bootstrap translations (generate fr/es/zh/ar/de)
+   - Translate CMS content with admin approval
+   - Translate chatbot + user content on demand (labeled "auto-translated")
+
+Admin Approval Workflow:
+1. Machine translation saved as 'pending'
+2. Admin edits + approves
+3. App only reads 'approved_text'
+4. English update invalidates translations → pending again
+
+Lazy Loading (performance):
+- Load 'common' scope at startup
+- Fetch other scopes when screens open:
+  /i18n/{lang}?scope=events, /i18n/{lang}?scope=profile, etc.
+
+RTL Rules (Arabic):
+- Use directional layouts (leading/trailing)
+- Do NOT mirror semantic icons
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

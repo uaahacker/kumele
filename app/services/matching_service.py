@@ -1,6 +1,33 @@
 """
 Matching Service for Event Matching.
+
 Location-based + hobby similarity + engagement weighting.
+
+Matching Pipeline (per requirements Section 3A):
+1. Convert address → lat/lon (OpenStreetMap Nominatim)
+2. Compute distance (Haversine formula)
+3. Create hobby/event embeddings (Hugging Face)
+4. Compute TFRS hybrid relevance score (collab + content)
+5. Final re-ranking score combining:
+   - Distance score (closer = higher)
+   - Hobby similarity score
+   - Engagement weight (RSVPs, attendance, blogs read, ads clicked)
+   - Reward/trust boosting (none/bronze/silver/gold tier)
+   - User reputation (complaints vs real attendance)
+
+Required Inputs (for both /match/events and /recommendations/events):
+- User profile: hobbies, age, location (lat/lon)
+- Event profile: hobby tags, location, time
+- Engagement: RSVPs, attendance, blogs read, ads clicked
+- Reward status: none/bronze/silver/gold
+- User reputation (complaints vs real attendance)
+
+Output includes score breakdown (helps debugging + UI transparency).
+Works for new users with fallback logic (popular events nearby).
+
+Key Distinction:
+- /match/events = objective relevance (distance + hobby match)
+- /recommendations/events = predicted preference (TFRS collaborative)
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession

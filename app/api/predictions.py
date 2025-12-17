@@ -1,6 +1,21 @@
 """
 Prediction API endpoints.
-Handles attendance forecasting and trend prediction using Prophet.
+
+Handles attendance forecasting and trend prediction.
+
+Models (v1 per requirements):
+- Prophet (time-series forecasting)
+- Scikit-learn regression (no-show/turnout prediction)
+
+Note: Uses confidence intervals, NOT "95% accuracy" claims.
+Metrics: MAE/RMSE + confidence interval.
+
+Required minimal tables:
+- events
+- interactions
+- timeseries_daily
+- timeseries_hourly
+- users (read-only fields: age_group, reward_status)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +32,11 @@ from app.schemas.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# PREDICTIONS ROUTER
+# Prophet time-series + sklearn regression
+# ============================================
 router = APIRouter(prefix="/predict", tags=["Predictions"])
 
 

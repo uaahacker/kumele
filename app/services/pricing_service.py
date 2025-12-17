@@ -1,6 +1,38 @@
 """
 Dynamic Pricing and Discount Service.
+
 Handles price optimization and discount suggestions.
+
+Pricing Model Parameters:
+- BASE_DEMAND_MULTIPLIER: Starting point for demand calculation
+- TIME_DECAY_FACTOR: How much price changes as event approaches
+- COMPETITOR_WEIGHT: Factor for similar event pricing (future)
+- DEMAND_WEIGHT: Weight of booking rate in final price
+- CAPACITY_WEIGHT: Weight of capacity utilization
+- SEASONALITY_WEIGHT: Weight of month/day factors
+
+Time-Based Pricing:
+- 30+ days out: 0.85x (early bird discount)
+- 14-30 days: 0.95x
+- 7-14 days: 1.0x (base price)
+- 3-7 days: 1.1x
+- 1-3 days: 1.15x
+- <1 day: 1.2x (last minute premium)
+
+Demand-Based Pricing:
+- >80% booked: 1.25x (high demand)
+- 60-80% booked: 1.15x
+- 40-60% booked: 1.05x
+- 20-40% booked: 1.0x
+- <20% booked: 0.85x (discount to drive sales)
+
+Price Bounds:
+- Never more than ±50% from base price
+- Prevents extreme price manipulation
+
+Storage:
+- Uses in-memory cache for pricing history (DB schema mismatch)
+- pricing_history table exists but has different columns
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession

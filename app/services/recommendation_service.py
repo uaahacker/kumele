@@ -1,6 +1,47 @@
 """
 Recommendation Service for Personalized Recommendations.
+
 Uses collaborative filtering and content-based approaches.
+
+Recommendation Pipeline (per requirements Section 3A):
+==============================================================================
+1. Cold Start (new users with <5 interactions):
+   - Use demographic-based recommendations (age, location, selected hobbies)
+   - Boost popular events in user's area
+   - Apply diversity requirement (max 3 per hobby category)
+
+2. Warm Users (5+ interactions):
+   - Collaborative Filtering: Find similar users, suggest their liked events
+   - Content-Based: Match user hobby profile to event tags
+   - Hybrid Score: 0.6 * collab + 0.4 * content (tunable)
+
+3. Score Boosting Factors:
+   - Reward tier boost (none/bronze/silver/gold → 0/5/10/15%)
+   - Engagement weight (RSVPs, attendance, blogs read, ads clicked)
+   - Recency decay (older interactions count less)
+   - Host rating factor (higher rated hosts get boost)
+
+4. Final Ranking:
+   - Apply diversity filter (prevent hobby category dominance)
+   - Limit to top-k results (configurable, default 20)
+   - Cache results for fast retrieval (TTL 1 hour)
+
+Engagement Weights (configurable):
+==============================================================================
+- view: 1.0 (baseline)
+- click: 2.0
+- rsvp: 5.0
+- attend: 10.0
+- share: 3.0
+- bookmark: 4.0
+
+Key Endpoints:
+==============================================================================
+- POST /recommendations/events: Get personalized event recommendations
+- POST /recommendations/train: Trigger model training (batch)
+- GET /recommendations/cache: Check cache status
+
+Note: Uses BigInteger for user_id compatibility with Kumele's Postgres schema.
 """
 from typing import Optional, List, Dict, Any, Tuple, Union
 from sqlalchemy.ext.asyncio import AsyncSession

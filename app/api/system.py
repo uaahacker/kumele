@@ -1,5 +1,46 @@
 """
 System Health and Monitoring API endpoints.
+
+=============================================================================
+AI SYSTEM HEALTH (Section 3J of Requirements)
+=============================================================================
+
+Overview:
+Comprehensive health monitoring for all AI/ML system components.
+Used by load balancers, monitoring tools, and admin dashboards.
+
+Components Monitored:
+1. Database (PostgreSQL): Connection + pool status
+2. Redis: Cache/queue connectivity
+3. Qdrant: Vector DB status
+4. LLM Services (3-tier fallback):
+   - Internal TGI (self-hosted)
+   - Mistral API (external)
+   - OpenRouter (free fallback)
+5. ML Models: HuggingFace model availability
+
+Health Status:
+- healthy: All critical components working
+- degraded: Non-critical failures (e.g., 1 LLM down)
+- unhealthy: Critical component failure
+
+Response Format:
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "components": {
+    "database": {"status": "healthy", "latency_ms": 5},
+    "redis": {"status": "healthy"},
+    "llm": {"status": "healthy", "provider": "mistral_api"}
+  },
+  "system": {"cpu": 45.2, "memory": 68.5}
+}
+
+Endpoints:
+- GET /ai/health: Full health check (all components)
+- GET /ai/health/quick: Fast check (DB + Redis only)
+- GET /ai/metrics: Prometheus-compatible metrics
+- GET /ai/models: List loaded ML models
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession

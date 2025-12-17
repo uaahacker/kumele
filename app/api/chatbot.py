@@ -1,6 +1,31 @@
 """
 Chatbot API endpoints.
-Handles RAG-based Q&A and knowledge base management.
+
+Handles RAG-based Q&A using Qdrant vector DB.
+
+Chatbot Pipeline (per requirements):
+1. POST /chatbot/ask:
+   - Detect language → translate to English
+   - Embed query → retrieve top-k from Qdrant
+   - Send context to LLM → generate answer
+   - Translate back if needed
+   - Log to Postgres
+
+2. POST /chatbot/sync (internal/webhook):
+   - Chunk content (~500 tokens)
+   - Embed + upsert into Qdrant
+   - Track versions
+
+3. POST /chatbot/feedback:
+   - Store feedback (positive/negative)
+
+Key principle: LLM stays static. Only embeddings/docs update.
+
+Storage:
+- knowledge_documents (Postgres)
+- embeddings_metadata (Postgres)
+- chatbot_logs (Postgres)
+- Document vectors (Qdrant)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +44,11 @@ from app.schemas.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# CHATBOT ROUTER
+# RAG-based Q&A with Qdrant + LLM
+# ============================================
 router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
 
 

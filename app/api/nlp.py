@@ -1,6 +1,41 @@
 """
 NLP API endpoints.
+
 Handles sentiment analysis, keyword extraction, and trend detection.
+
+=============================================================================
+NLP PROCESSING SYSTEM (Section 3F of Requirements)
+=============================================================================
+
+Overview:
+Natural Language Processing for user-generated content analysis.
+Powered by HuggingFace transformers.
+
+Capabilities:
+- Sentiment Analysis: positive/negative/neutral classification
+- Keyword Extraction: TF-IDF + NER based extraction
+- Topic Classification: Zero-shot categorization
+- Trend Detection: Identify trending topics over time
+
+Sentiment Scoring:
+- Range: -1.0 (very negative) to +1.0 (very positive)
+- Thresholds: <-0.3 negative, >0.3 positive, else neutral
+- Multi-language: Auto-detect and translate to English
+
+Content Types:
+- Posts, comments, reviews, messages
+- Event descriptions, user bios
+- Support emails (for routing)
+
+Endpoints:
+- POST /nlp/sentiment: Analyze text sentiment
+- POST /nlp/keywords: Extract keywords from text
+- POST /nlp/topics: Classify text topics
+- GET /nlp/trends: Get trending topics (daily/weekly)
+
+Models Used:
+- distilbert-base-uncased-finetuned-sst-2-english (sentiment)
+- sentence-transformers/all-MiniLM-L6-v2 (embeddings)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

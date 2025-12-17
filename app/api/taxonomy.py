@@ -1,6 +1,21 @@
 """
 Taxonomy API endpoints.
+
 Handles interest/hobby taxonomy management.
+
+Core Principle (per requirements):
+- Use interest_id EVERYWHERE (never hardcode labels in frontend)
+
+DB Tables (owned by ML):
+- interest_taxonomy: Hierarchical structure
+- interest_metadata: icon_key, display_order, color_token
+- interest_translations: Labels per language
+
+API Pattern:
+- GET /taxonomy/interests?updated_since=...
+- Frontends sync taxonomy, cache locally, display translated labels
+
+This is the SOURCE OF TRUTH for all hobby/interest IDs across the platform.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -1,6 +1,69 @@
 """
 System Health and Monitoring Service.
+
 Handles AI system health checks and monitoring.
+
+Health Check Components (per requirements Section 3J):
+==============================================================================
+1. Database (PostgreSQL):
+   - Connection test via simple query
+   - Connection pool status
+
+2. Cache (Redis):
+   - PING/PONG test
+   - Memory usage check
+
+3. Vector DB (Qdrant):
+   - Collection status
+   - Vector count
+
+4. LLM Services (3-tier fallback):
+   - Internal TGI: Self-hosted model
+   - Mistral API: External paid API
+   - OpenRouter: External free fallback
+   - Status: healthy if ANY provider works
+
+5. ML Models:
+   - HuggingFace model availability
+   - Model loading status
+
+Health Response Format:
+==============================================================================
+{
+  "status": "healthy" | "degraded" | "unhealthy",
+  "timestamp": "ISO datetime",
+  "components": {
+    "database": {"status": "healthy", "latency_ms": 5},
+    "redis": {"status": "healthy", "latency_ms": 2},
+    "qdrant": {"status": "healthy", "collections": 1},
+    "llm": {"status": "healthy", "provider": "mistral_api"},
+    "ml_models": {"status": "healthy", "loaded": ["embeddings", "sentiment"]}
+  },
+  "system": {
+    "cpu_percent": 45.2,
+    "memory_percent": 68.5,
+    "disk_percent": 42.0
+  }
+}
+
+Status Definitions:
+==============================================================================
+- healthy: All critical components working
+- degraded: Some non-critical components failing (e.g., 1 LLM provider down)
+- unhealthy: Critical component failure (DB, all LLMs down)
+
+Monitoring Endpoints:
+==============================================================================
+- GET /system/health: Full health check
+- GET /system/health/quick: Fast health check (DB + Redis only)
+- GET /system/metrics: Prometheus-compatible metrics
+- GET /system/models: List loaded ML models
+
+Alerts:
+==============================================================================
+- Memory > 90%: Warning
+- Disk > 85%: Warning
+- Any critical component unhealthy: Critical alert
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession

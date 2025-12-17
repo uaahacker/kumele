@@ -1,6 +1,50 @@
 """
 Moderation API endpoints.
+
 Handles unified content moderation for text, images, and video.
+
+=============================================================================
+CONTENT MODERATION SYSTEM (Section 3G of Requirements)
+=============================================================================
+
+Overview:
+AI-powered content moderation for community safety.
+Supports text, image, and video content.
+
+Text Moderation:
+- Toxicity detection (toxic-bert model)
+- Hate speech classification
+- Profanity filtering
+- Spam detection
+- PII detection (emails, phones, SSN)
+
+Image Moderation:
+- NSFW content detection
+- Violence/gore detection
+- Face detection (privacy)
+- Logo/watermark detection
+
+Video Moderation (Future):
+- Frame-by-frame analysis
+- Audio transcription + text moderation
+
+Scoring System:
+- 0.0 - 0.3: Safe (auto-approve)
+- 0.3 - 0.7: Review (manual queue)
+- 0.7 - 1.0: Reject (auto-reject)
+
+Job Flow:
+pending → processing → completed/failed/needs_review
+
+Endpoints:
+- POST /moderation: Submit content for moderation
+- GET /moderation/job/{job_id}: Check moderation job status
+- POST /moderation/batch: Batch moderation submission
+- GET /moderation/queue: Get pending review queue
+
+Async Processing:
+- Heavy jobs processed via Celery
+- Webhook callback on completion
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

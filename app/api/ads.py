@@ -1,6 +1,39 @@
 """
 Advertising API endpoints.
+
 Handles audience matching and ad performance prediction.
+
+=============================================================================
+ADS TARGETING SYSTEM (Section 3E of Requirements)
+=============================================================================
+
+Overview:
+AI-powered advertising targeting that matches ads to relevant audience
+segments based on demographics, interests, and behavior.
+
+Capabilities:
+- Audience segment matching based on user profiles
+- CTR (Click-Through Rate) prediction
+- Conversion prediction
+- Budget optimization recommendations
+- Performance analytics
+
+Targeting Criteria:
+- Demographics: age, gender, location
+- Interests: hobby categories from taxonomy
+- Behavior: event attendance, engagement level
+- Lookalike: similar to high-value users
+
+Endpoints:
+- POST /ads/audience-match: Find matching audience for ad criteria
+- POST /ads/predict-performance: Predict CTR and conversion rates
+- GET /ads/segments: List available audience segments
+- POST /ads/log: Log impressions and clicks
+
+Integration:
+- Uses same hobby taxonomy as recommendations
+- Respects user privacy settings
+- GDPR compliant (no PII in targeting)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

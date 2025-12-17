@@ -1,6 +1,21 @@
 """
 Matching API endpoints.
+
 Handles event matching based on location, hobbies, and engagement.
+
+Matching Pipeline (per requirements):
+1. Convert address → lat/lon (OpenStreetMap Nominatim)
+2. Compute distance (Haversine formula)
+3. Create hobby/event embeddings (Hugging Face)
+4. Compute hybrid relevance score (collab + content)
+5. Final re-ranking score combining:
+   - Distance score (closer = higher)
+   - Hobby similarity score
+   - Engagement weight
+   - Reward/trust boosting
+
+Output includes score breakdown for debugging/UI transparency.
+Works for new users with fallback logic (popular events nearby).
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +30,11 @@ from app.schemas.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# MATCHING ROUTER
+# Handles location-based + hobby similarity matching
+# ============================================
 router = APIRouter(prefix="/match", tags=["Matching"])
 
 

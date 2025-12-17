@@ -1,6 +1,29 @@
 """
 Support Email API endpoints.
+
 Handles AI-powered email support system.
+
+IMPORTANT: Support is EMAIL-ONLY (per requirements).
+- Uses Acelle SMTP or IMAP webhook
+- NO in-app support chat
+
+Support APIs (4 per spec):
+1. POST /support/email/incoming - Process incoming email
+2. POST /support/email/reply/:id - Send reply
+3. POST /support/email/escalate/:id - Escalate to tier 2
+4. GET /support/email/queue - View email queue
+
+AI Features:
+- Category classification (billing, technical, account, event, general)
+- Sentiment analysis (positive, neutral, negative)
+- Priority calculation (1-5 scale)
+- Auto-generated reply draft
+- Entity extraction (emails, phones, IDs)
+
+Escalation Triggers:
+- Priority >= 4
+- Negative sentiment
+- Specific keywords (urgent, legal, etc.)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession

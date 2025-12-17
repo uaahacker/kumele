@@ -1,6 +1,62 @@
 """
 Support Email Service.
+
 Handles AI-powered email routing, analysis, and response drafting.
+
+Support Pipeline (per requirements - EMAIL ONLY, no chat):
+==============================================================================
+1. Email Ingestion:
+   - Parse incoming email (subject, body, sender, attachments)
+   - Extract metadata (timestamp, thread ID, priority indicators)
+   - Store in support_emails table
+
+2. Email Analysis:
+   - Sentiment analysis (frustrated, neutral, satisfied)
+   - Intent classification:
+     * billing: Payment issues, refunds, invoices
+     * technical: App bugs, feature questions
+     * account: Login issues, profile changes
+     * event: Event-related inquiries
+     * general: Other inquiries
+   - Urgency scoring (0-10 scale)
+   - Entity extraction (order IDs, event names, dates)
+
+3. Auto-Routing:
+   - Route to appropriate queue based on intent
+   - Priority assignment based on urgency + sentiment
+   - VIP detection (high-value users get priority)
+
+4. Response Drafting:
+   - Generate draft response using LLM
+   - Pull relevant FAQ/knowledge base content
+   - Human review required before sending
+
+Email Status Flow:
+==============================================================================
+new → analyzing → routed → draft_ready → sent
+                        ↘ escalated (if urgent/complex)
+
+Priority Levels:
+==============================================================================
+- critical (1): Account locked, payment failed, urgent event issue
+- high (2): Frustrated user, billing question, near-event inquiry
+- medium (3): General questions, feature requests
+- low (4): Feedback, suggestions, non-urgent
+
+Storage:
+==============================================================================
+- support_emails: Raw email storage
+- support_email_analysis: AI analysis results
+
+Key Endpoints:
+==============================================================================
+- POST /support/email/ingest: Receive new email
+- POST /support/email/analyze: Analyze email content
+- GET /support/email/queue: Get support queue
+- POST /support/email/draft: Generate response draft
+- GET /support/email/{email_id}: Get email details
+
+Note: NO live chat support - email only per requirements.
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -1,6 +1,54 @@
 """
 Rating Service for Host Ratings Calculation.
+
 Implements the weighted 5-star rating model (70% attendee + 30% system).
+
+Rating Formula (per requirements Section 3D):
+==============================================================================
+Final Rating = (0.70 × Attendee Average) + (0.30 × System Score)
+
+Attendee Rating (70%):
+- Direct 1-5 star ratings from event attendees
+- Only verified attendees can rate (attended = true)
+- Weighted by recency (newer ratings count more)
+
+System Score (30%):
+- Calculated from objective metrics:
+  * Response rate to RSVPs (0-100%)
+  * Cancellation rate (inverted, lower is better)
+  * No-show rate for host (inverted)
+  * Event completion rate
+  * Average attendance vs capacity
+
+System Score Breakdown:
+==============================================================================
+- response_score: How quickly host responds to inquiries (0-5)
+- reliability_score: (1 - cancellation_rate) * 5
+- attendance_score: Average (actual_attendees / expected) * 5
+- completion_score: Completed events / Total events * 5
+
+Final system_score = average of above components
+
+Rating Thresholds:
+==============================================================================
+- 4.5+ : Excellent (badge eligible)
+- 4.0-4.5: Very Good
+- 3.5-4.0: Good
+- 3.0-3.5: Average
+- <3.0: Below Average (review trigger)
+
+Storage:
+==============================================================================
+- event_ratings: Individual rating records
+- host_rating_aggregate: Cached aggregate per host
+- Updated on each new rating submission
+
+Key Endpoints:
+==============================================================================
+- POST /ratings/submit: Submit attendee rating
+- GET /ratings/host/{host_id}: Get host's aggregate rating
+- GET /ratings/event/{event_id}: Get event's ratings breakdown
+- POST /ratings/recalculate: Force recalculation of aggregates
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession

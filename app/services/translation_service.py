@@ -1,6 +1,68 @@
 """
 Translation and Internationalization Service.
+
 Handles UI string translations and dynamic text translation.
+
+i18n Architecture (per requirements Section 3I):
+==============================================================================
+1. UI Strings (Lazy Loading):
+   - Frontend requests translations for current page only
+   - Strings cached on first load (Redis TTL 1 hour)
+   - Fallback: English if translation missing
+
+2. Admin Translation Workflow:
+   - POST new UI strings (English default)
+   - Submit translations for review
+   - Admin approval required before live
+   - Version tracking for rollback
+
+3. Dynamic Content Translation:
+   - Event descriptions, user bios, etc.
+   - On-demand translation using LLM
+   - Cached after first translation
+
+Supported Languages:
+==============================================================================
+- en: English (default/source)
+- ar: Arabic (RTL)
+- fr: French
+- es: Spanish
+- de: German
+- tr: Turkish
+- he: Hebrew (RTL)
+
+RTL (Right-to-Left) Handling:
+==============================================================================
+- Arabic and Hebrew require RTL layout
+- API returns is_rtl flag with translations
+- Frontend handles layout direction
+
+Translation Status:
+==============================================================================
+- draft: Initial submission
+- pending_review: Awaiting admin approval
+- approved: Live and visible to users
+- rejected: Needs revision
+
+Storage:
+==============================================================================
+- ui_strings: Master string definitions (key, context, category)
+- ui_translations: Language-specific translations
+
+Caching Strategy:
+==============================================================================
+- Redis cache for active translations
+- Key format: i18n:{lang}:{category}:{key}
+- TTL: 3600 seconds (1 hour)
+- Invalidate on translation update
+
+Key Endpoints:
+==============================================================================
+- GET /i18n/strings: Get UI strings for language (lazy load)
+- POST /i18n/strings: Add new UI string
+- PUT /i18n/strings/{key}: Update translation
+- POST /i18n/translate: Translate dynamic content
+- GET /i18n/languages: List supported languages
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession

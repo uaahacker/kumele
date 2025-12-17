@@ -1,6 +1,47 @@
 """
 Rating API endpoints.
+
 Handles weighted 5-star host rating model.
+
+=============================================================================
+HOST RATING SYSTEM (Section 3D of Requirements)
+=============================================================================
+
+Overview:
+Weighted rating system combining attendee feedback with system metrics.
+
+Rating Formula:
+Final = (0.70 × Attendee Avg) + (0.30 × System Score)
+
+Attendee Rating (70%):
+- Direct 1-5 star ratings from verified attendees
+- Only users who attended can rate
+- Weighted by recency (newer = more weight)
+
+System Score (30%):
+- Response rate to inquiries
+- Cancellation rate (lower = better)
+- No-show rate (lower = better)
+- Event completion rate
+- Capacity utilization
+
+Rating Display:
+- 4.5+ : Excellent (gold badge)
+- 4.0-4.5: Very Good (silver badge)
+- 3.5-4.0: Good
+- 3.0-3.5: Average
+- <3.0: Below Average (review trigger)
+
+Endpoints:
+- POST /rating/event/{event_id}: Submit event rating
+- GET /rating/host/{host_id}: Get host aggregate rating
+- GET /rating/event/{event_id}/breakdown: Rating breakdown
+- POST /rating/recalculate: Force aggregate recalc
+
+Rules:
+- One rating per user per event
+- Can update within 7 days
+- Cannot rate own events
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
