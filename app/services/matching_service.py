@@ -183,10 +183,16 @@ class MatchingService:
         """
         cutoff_date = datetime.utcnow() - timedelta(days=90)
         
+        # Convert user_id to int if needed
+        try:
+            user_id_int = int(user_id) if isinstance(user_id, str) else user_id
+        except (ValueError, TypeError):
+            return 0.0  # No engagement score for UUID users
+        
         # Count interactions
         query = select(func.count(UserInteraction.id)).where(
             and_(
-                UserInteraction.user_id == user_id,
+                UserInteraction.user_id == user_id_int,
                 UserInteraction.created_at >= cutoff_date
             )
         )
