@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     TRANSLATE_URL: str = "http://libretranslate:5000"
     SUPPORTED_LANGUAGES: list[str] = ["en", "fr", "es", "zh", "ar", "de"]
 
-    # LLM Configuration (supports both internal TGI and external API)
+    # LLM Configuration (supports internal TGI, external Mistral API, and OpenRouter)
     # Option 1: Internal TGI server (same server/network)
     LLM_API_URL: str = "http://tgi:80"
     LLM_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.2"
@@ -40,8 +40,13 @@ class Settings(BaseSettings):
     MISTRAL_API_URL: str = "https://api.mistral.ai/v1"
     MISTRAL_MODEL: str = "mistral-small-latest"  # or mistral-medium, mistral-large
     
-    # LLM Mode: "internal" (TGI) or "external" (Mistral API)
-    LLM_MODE: str = "internal"  # Change to "external" to use Mistral API
+    # Option 3: OpenRouter (free Mistral and other models)
+    OPENROUTER_API_KEY: Optional[str] = None  # Set this to use OpenRouter
+    OPENROUTER_API_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_MODEL: str = "mistralai/mistral-7b-instruct:free"  # Free Mistral on OpenRouter
+    
+    # LLM Mode: "internal" (TGI), "external" (Mistral API), or "openrouter"
+    LLM_MODE: str = "internal"  # Change to "external" or "openrouter"
 
     # Models
     SENTIMENT_MODEL: str

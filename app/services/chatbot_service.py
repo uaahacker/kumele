@@ -1,7 +1,7 @@
 """
 Chatbot Service for RAG-based Knowledge Base Q&A.
 Uses Qdrant for vector search and LLM for answer generation.
-Supports both internal TGI and external Mistral API.
+Supports internal TGI, external Mistral API, and OpenRouter.
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -222,6 +222,48 @@ class ChatbotService:
         return None, 0.0
 
     @staticmethod
+    async def call_openrouter(prompt: str) -> Tuple[str, float]:
+        """Call OpenRouter API for free LLM inference (Mistral and other models)."""
+        if not settings.OPENROUTER_API_KEY:
+            logger.warning("OPENROUTER_API_KEY not set")
+            return None, 0.0
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{settings.OPENROUTER_API_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://kumele.com",  # Required by OpenRouter
+                        "X-Title": "Kumele AI Backend"  # Optional, shows in OpenRouter dashboard
+                    },
+                    json={
+                        "model": settings.OPENROUTER_MODEL,
+                        "messages": [
+                            {"role": "user", "content": prompt}
+                        ],
+                        "max_tokens": 500,
+                        "temperature": 0.7
+                    },
+                    timeout=60.0  # OpenRouter may be slower for free models
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    return answer, 0.85  # Good confidence for OpenRouter
+                else:
+                    logger.warning(f"OpenRouter API error: {response.status_code} - {response.text}")
+                    
+        except httpx.TimeoutException:
+            logger.warning("OpenRouter API timeout")
+        except Exception as e:
+            logger.warning(f"OpenRouter API error: {e}")
+        
+        return None, 0.0
+
+    @staticmethod
     async def generate_answer(
         query: str,
         context: List[str],
@@ -229,7 +271,8 @@ class ChatbotService:
     ) -> Tuple[str, float]:
         """
         Generate answer using LLM with retrieved context.
-        Supports both internal TGI and external Mistral API.
+        Supports internal TGI, external Mistral API, and OpenRouter (free).
+        Fallback order: Primary mode -> Other modes -> Context-based response.
         """
         try:
             # Build prompt
@@ -245,17 +288,34 @@ Question: {query}
 
 Answer:"""
             
-            # Try based on configured mode
+            # Try based on configured mode with fallbacks
             answer = None
             confidence = 0.0
             
+            # 1. Try primary mode first
             if settings.LLM_MODE == "external" and settings.MISTRAL_API_KEY:
-                # Use external Mistral API
                 answer, confidence = await ChatbotService.call_external_mistral(prompt)
+            elif settings.LLM_MODE == "openrouter" and settings.OPENROUTER_API_KEY:
+                answer, confidence = await ChatbotService.call_openrouter(prompt)
+            else:
+                # Default to internal TGI
+                answer, confidence = await ChatbotService.call_internal_llm(prompt)
+            
+            # 2. If primary failed, try fallbacks
+            if not answer:
+                # Try external Mistral if not already tried
+                if settings.MISTRAL_API_KEY and settings.LLM_MODE != "external":
+                    answer, confidence = await ChatbotService.call_external_mistral(prompt)
             
             if not answer:
-                # Fall back to internal TGI
-                answer, confidence = await ChatbotService.call_internal_llm(prompt)
+                # Try OpenRouter if not already tried (free fallback)
+                if settings.OPENROUTER_API_KEY and settings.LLM_MODE != "openrouter":
+                    answer, confidence = await ChatbotService.call_openrouter(prompt)
+            
+            if not answer:
+                # Try internal TGI if not already tried
+                if settings.LLM_MODE != "internal":
+                    answer, confidence = await ChatbotService.call_internal_llm(prompt)
             
             if answer:
                 return answer, confidence
