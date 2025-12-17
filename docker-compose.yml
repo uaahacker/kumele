@@ -1,0 +1,179 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: kumele_postgres
+    environment:
+      POSTGRES_USER: kumele
+      POSTGRES_PASSWORD: kumele
+      POSTGRES_DB: kumele_ai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./kumele_ai/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kumele -d kumele_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kumele_network
+
+  # Redis for Queue and Cache
+  redis:
+    image: redis:7-alpine
+    container_name: kumele_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kumele_network
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: kumele_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6333/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - kumele_network
+
+  # LibreTranslate / Argos Translate
+  argos:
+    image: libretranslate/libretranslate:latest
+    container_name: kumele_argos
+    environment:
+      - LT_LOAD_ONLY=en,es,fr,de,ar,zh
+      - LT_DISABLE_WEB_UI=true
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/languages"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kumele_network
+
+  # Mistral LLM via Text Generation Inference
+  mistral:
+    image: ghcr.io/huggingface/text-generation-inference:latest
+    container_name: kumele_mistral
+    environment:
+      - MODEL_ID=mistralai/Mistral-7B-Instruct-v0.2
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - MAX_INPUT_LENGTH=4096
+      - MAX_TOTAL_TOKENS=8192
+    volumes:
+      - mistral_data:/data
+    ports:
+      - "8080:80"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    networks:
+      - kumele_network
+
+  # FastAPI Application
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: kumele_api
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - SECRET_KEY=${SECRET_KEY:-change-me}
+      - API_KEY=${API_KEY:-internal-api-key}
+      - DATABASE_URL=postgresql://kumele:kumele@postgres:5432/kumele_ai
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - TRANSLATE_URL=http://argos:5000
+      - LLM_API_URL=http://mistral:80
+      - LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./kumele_ai:/app/kumele_ai
+      - model_cache:/root/.cache
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ai/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kumele_network
+
+  # Celery Worker
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: kumele_worker
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=postgresql://kumele:kumele@postgres:5432/kumele_ai
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - TRANSLATE_URL=http://argos:5000
+      - LLM_API_URL=http://mistral:80
+      - LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./kumele_ai:/app/kumele_ai
+      - model_cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - kumele_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  mistral_data:
+  model_cache:
+
+networks:
+  kumele_network:
+    driver: bridge
