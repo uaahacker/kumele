@@ -20,6 +20,23 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def safe_user_id(user_id: Union[int, str]) -> Optional[int]:
+    """
+    Convert user_id to integer for database queries.
+    Returns None if conversion fails (e.g., UUID string).
+    """
+    if isinstance(user_id, int):
+        return user_id
+    if isinstance(user_id, str):
+        # Try to convert numeric string
+        try:
+            return int(user_id)
+        except (ValueError, TypeError):
+            # UUID or non-numeric string - user doesn't exist in DB yet
+            return None
+    return None
+
+
 class RecommendationService:
     """Service for generating personalized recommendations."""
     
@@ -56,8 +73,14 @@ class RecommendationService:
     ) -> List[Dict[str, Any]]:
         """Get user's interaction history."""
         try:
+            # Convert user_id to int for BigInteger column
+            db_user_id = safe_user_id(user_id)
+            if db_user_id is None:
+                logger.info(f"User {user_id} is UUID/string - no interactions in DB")
+                return []
+            
             query = select(UserInteraction).where(
-                UserInteraction.user_id == user_id
+                UserInteraction.user_id == db_user_id
             ).order_by(desc(UserInteraction.created_at)).limit(1000)
             
             result = await db.execute(query)
@@ -84,12 +107,18 @@ class RecommendationService:
     ) -> List[Dict[str, Any]]:
         """Get user's hobby preferences."""
         try:
+            # Convert user_id to int for BigInteger column
+            db_user_id = safe_user_id(user_id)
+            if db_user_id is None:
+                logger.info(f"User {user_id} is UUID/string - no hobbies in DB")
+                return []
+            
             query = select(UserHobby, InterestTaxonomy).join(
                 InterestTaxonomy,
                 UserHobby.hobby_id == InterestTaxonomy.interest_id
             ).where(
                 and_(
-                    UserHobby.user_id == user_id,
+                    UserHobby.user_id == db_user_id,
                     InterestTaxonomy.is_active == True
                 )
             )
@@ -116,6 +145,12 @@ class RecommendationService:
     ) -> List[Union[int, str]]:
         """Find users with similar interaction patterns."""
         try:
+            # Convert user_id to int for BigInteger column
+            db_user_id = safe_user_id(user_id)
+            if db_user_id is None:
+                logger.info(f"User {user_id} is UUID/string - no similar users")
+                return []
+            
             # Get current user's interactions
             user_interactions = await RecommendationService.get_user_interactions(db, user_id)
             
@@ -141,7 +176,7 @@ class RecommendationService:
                 and_(
                     UserInteraction.item_type == "event",
                     UserInteraction.item_id.in_(item_ids),
-                    UserInteraction.user_id != user_id
+                    UserInteraction.user_id != db_user_id  # Use converted int
                 )
             ).group_by(
                 UserInteraction.user_id
@@ -172,6 +207,18 @@ class RecommendationService:
         Returns default recommendations for new/unknown users.
         """
         try:
+            # Convert user_id to int for BigInteger columns
+            db_user_id = safe_user_id(user_id)
+            
+            # If user_id is UUID/string, return default recommendations
+            if db_user_id is None:
+                logger.info(f"User {user_id} is UUID/string - returning default hobbies")
+                return {
+                    "user_id": str(user_id),
+                    "recommendations": RecommendationService.DEFAULT_HOBBIES[:limit],
+                    "cached": False
+                }
+            
             # Get user's current hobbies
             user_hobbies = await RecommendationService.get_user_hobbies(db, user_id)
             current_hobby_ids = set(h["hobby_id"] for h in user_hobbies)
@@ -182,7 +229,7 @@ class RecommendationService:
                 Event.event_id == EventAttendance.event_id
             ).where(
                 and_(
-                    EventAttendance.user_id == user_id,
+                    EventAttendance.user_id == db_user_id,  # Use converted int
                     EventAttendance.checked_in == True
                 )
             ).distinct()
@@ -316,24 +363,31 @@ class RecommendationService:
         Returns default recommendations for new/unknown users.
         """
         try:
-            # Get user data
-            user_query = select(User).where(User.user_id == user_id)
-            result = await db.execute(user_query)
-            user = result.scalar_one_or_none()
+            # Convert user_id to int for BigInteger columns
+            db_user_id = safe_user_id(user_id)
+            
+            # Get user data (only if user_id is numeric)
+            user = None
+            if db_user_id is not None:
+                user_query = select(User).where(User.user_id == db_user_id)
+                result = await db.execute(user_query)
+                user = result.scalar_one_or_none()
             
             # Get user's hobbies
             user_hobbies = await RecommendationService.get_user_hobbies(db, user_id)
             hobby_ids = [h["hobby_id"] for h in user_hobbies]
             
             # Get user's past attended events
-            attended_query = select(EventAttendance.event_id).where(
-                and_(
-                    EventAttendance.user_id == user_id,
-                    EventAttendance.checked_in == True
+            attended_event_ids = set()
+            if db_user_id is not None:
+                attended_query = select(EventAttendance.event_id).where(
+                    and_(
+                        EventAttendance.user_id == db_user_id,
+                        EventAttendance.checked_in == True
+                    )
                 )
-            )
-            result = await db.execute(attended_query)
-            attended_event_ids = set(row[0] for row in result.fetchall())
+                result = await db.execute(attended_query)
+                attended_event_ids = set(row[0] for row in result.fetchall())
             
             # Get upcoming events
             now = datetime.utcnow()
@@ -458,11 +512,17 @@ class RecommendationService:
     ):
         """Cache recommendations for faster retrieval."""
         try:
+            # Convert user_id to int for BigInteger column
+            db_user_id = safe_user_id(user_id)
+            if db_user_id is None:
+                logger.info(f"Skipping cache for UUID user {user_id}")
+                return
+            
             # Delete old cache
             from sqlalchemy import delete
             delete_query = delete(RecommendationCache).where(
                 and_(
-                    RecommendationCache.user_id == user_id,
+                    RecommendationCache.user_id == db_user_id,
                     RecommendationCache.recommendation_type == rec_type
                 )
             )
@@ -470,7 +530,7 @@ class RecommendationService:
             
             # Create new cache entry
             cache = RecommendationCache(
-                user_id=user_id,
+                user_id=db_user_id,
                 recommendation_type=rec_type,
                 recommendations=recommendations,
                 computed_at=datetime.utcnow(),
@@ -489,9 +549,14 @@ class RecommendationService:
     ) -> Optional[List[Dict[str, Any]]]:
         """Get cached recommendations if still valid."""
         try:
+            # Convert user_id to int for BigInteger column
+            db_user_id = safe_user_id(user_id)
+            if db_user_id is None:
+                return None  # No cache for UUID users
+            
             query = select(RecommendationCache).where(
                 and_(
-                    RecommendationCache.user_id == user_id,
+                    RecommendationCache.user_id == db_user_id,
                     RecommendationCache.recommendation_type == recommendation_type,
                     RecommendationCache.expires_at > datetime.utcnow()
                 )
