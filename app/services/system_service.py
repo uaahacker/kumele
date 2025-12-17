@@ -120,40 +120,131 @@ class SystemService:
 
     @staticmethod
     async def check_llm() -> Dict[str, Any]:
-        """Check LLM service (TGI/Mistral) health."""
-        start = datetime.utcnow()
+        """Check LLM service health - tries all configured providers."""
+        results = {
+            "status": "unhealthy",
+            "providers": {},
+            "active_provider": None,
+            "message": "No LLM provider available"
+        }
         
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{settings.LLM_API_URL}/health",
-                    timeout=SystemService.CHECK_TIMEOUT
-                )
-                
-                latency = (datetime.utcnow() - start).total_seconds() * 1000
-                
-                if response.status_code == 200:
-                    return {
-                        "status": "healthy",
-                        "latency_ms": round(latency, 2),
-                        "model": settings.LLM_MODEL,
-                        "message": "LLM service healthy"
-                    }
-                else:
-                    return {
-                        "status": "degraded",
-                        "latency_ms": round(latency, 2),
-                        "model": settings.LLM_MODEL,
-                        "message": f"LLM returned status {response.status_code}"
-                    }
+        # Check 1: Internal TGI
+        if settings.LLM_API_URL:
+            start = datetime.utcnow()
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{settings.LLM_API_URL}/health",
+                        timeout=SystemService.CHECK_TIMEOUT
+                    )
+                    latency = (datetime.utcnow() - start).total_seconds() * 1000
                     
-        except Exception as e:
-            return {
-                "status": "unhealthy",
-                "latency_ms": None,
-                "model": settings.LLM_MODEL,
-                "message": str(e)
-            }
+                    if response.status_code == 200:
+                        results["providers"]["internal_tgi"] = {
+                            "status": "healthy",
+                            "latency_ms": round(latency, 2),
+                            "model": settings.LLM_MODEL
+                        }
+                        results["status"] = "healthy"
+                        results["active_provider"] = "internal_tgi"
+                    else:
+                        results["providers"]["internal_tgi"] = {
+                            "status": "degraded",
+                            "latency_ms": round(latency, 2),
+                            "error": f"Status {response.status_code}"
+                        }
+            except Exception as e:
+                results["providers"]["internal_tgi"] = {
+                    "status": "unhealthy",
+                    "error": str(e)[:100]
+                }
+        
+        # Check 2: External Mistral API
+        if settings.MISTRAL_API_KEY:
+            start = datetime.utcnow()
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{settings.MISTRAL_API_URL}/models",
+                        headers={"Authorization": f"Bearer {settings.MISTRAL_API_KEY}"},
+                        timeout=SystemService.CHECK_TIMEOUT
+                    )
+                    latency = (datetime.utcnow() - start).total_seconds() * 1000
+                    
+                    if response.status_code == 200:
+                        results["providers"]["mistral_api"] = {
+                            "status": "healthy",
+                            "latency_ms": round(latency, 2),
+                            "model": settings.MISTRAL_MODEL
+                        }
+                        if results["status"] != "healthy":
+                            results["status"] = "healthy"
+                            results["active_provider"] = "mistral_api"
+                    else:
+                        results["providers"]["mistral_api"] = {
+                            "status": "degraded",
+                            "latency_ms": round(latency, 2),
+                            "error": f"Status {response.status_code}"
+                        }
+            except Exception as e:
+                results["providers"]["mistral_api"] = {
+                    "status": "unhealthy",
+                    "error": str(e)[:100]
+                }
+        
+        # Check 3: OpenRouter (FREE)
+        if settings.OPENROUTER_API_KEY:
+            start = datetime.utcnow()
+            try:
+                async with httpx.AsyncClient() as client:
+                    # OpenRouter uses /models endpoint to check API key validity
+                    response = await client.get(
+                        f"{settings.OPENROUTER_API_URL}/models",
+                        headers={
+                            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                            "HTTP-Referer": "https://kumele.com"
+                        },
+                        timeout=SystemService.CHECK_TIMEOUT
+                    )
+                    latency = (datetime.utcnow() - start).total_seconds() * 1000
+                    
+                    if response.status_code == 200:
+                        results["providers"]["openrouter"] = {
+                            "status": "healthy",
+                            "latency_ms": round(latency, 2),
+                            "model": settings.OPENROUTER_MODEL,
+                            "note": "Free tier available"
+                        }
+                        if results["status"] != "healthy":
+                            results["status"] = "healthy"
+                            results["active_provider"] = "openrouter"
+                    else:
+                        results["providers"]["openrouter"] = {
+                            "status": "degraded",
+                            "latency_ms": round(latency, 2),
+                            "error": f"Status {response.status_code}"
+                        }
+            except Exception as e:
+                results["providers"]["openrouter"] = {
+                    "status": "unhealthy",
+                    "error": str(e)[:100]
+                }
+        
+        # Set final message
+        healthy_providers = [k for k, v in results["providers"].items() if v.get("status") == "healthy"]
+        if healthy_providers:
+            results["status"] = "healthy"
+            results["message"] = f"LLM available via: {', '.join(healthy_providers)}"
+            if not results["active_provider"]:
+                results["active_provider"] = healthy_providers[0]
+        else:
+            configured = list(results["providers"].keys())
+            if configured:
+                results["message"] = f"All configured providers unhealthy: {', '.join(configured)}"
+            else:
+                results["message"] = "No LLM providers configured (set OPENROUTER_API_KEY for free access)"
+        
+        return results
 
     @staticmethod
     async def check_translate() -> Dict[str, Any]:
