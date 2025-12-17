@@ -167,7 +167,7 @@ async def submit_feedback(
 @router.get(
     "/history/{user_id}",
     summary="Get Chat History",
-    description="Get recent chat history for a user."
+    description="Get recent chat history for a user. User ID can be UUID or any string (like 'user-123')."
 )
 async def get_chat_history(
     user_id: str,
@@ -180,7 +180,12 @@ async def get_chat_history(
         from app.models.database_models import ChatbotLog
         import uuid
         
-        user_uuid = uuid.UUID(user_id)
+        # Support both UUID and non-UUID strings
+        try:
+            user_uuid = uuid.UUID(user_id)
+        except (ValueError, TypeError):
+            # Non-UUID user_id - generate deterministic UUID from string
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
         
         query = select(ChatbotLog).where(
             ChatbotLog.user_id == user_uuid
@@ -191,6 +196,7 @@ async def get_chat_history(
         
         return {
             "user_id": user_id,
+            "resolved_user_uuid": str(user_uuid),
             "history": [
                 {
                     "query_id": str(log.id),

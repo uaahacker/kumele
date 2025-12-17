@@ -317,10 +317,19 @@ class KnowledgeSyncResponse(BaseModel):
 
 
 class ChatbotFeedbackRequest(BaseModel):
-    """Request to submit chatbot feedback."""
+    """Request to submit chatbot feedback.
+    
+    Feedback can be any text. Common values like 'good', 'helpful', 'great', 'excellent',
+    'useful' are mapped to 'positive'. Values like 'bad', 'wrong', 'incorrect', 'unhelpful',
+    'not helpful' are mapped to 'negative'. Any other text defaults to 'positive'.
+    """
     query_id: str
     user_id: Optional[str] = None
-    feedback: str = Field(..., description="helpful, not_helpful, incorrect, incomplete")
+    feedback: str = Field(
+        ..., 
+        description="User feedback text (e.g., 'good', 'helpful', 'bad', 'unhelpful', or any text)",
+        examples=["good", "helpful", "it was great", "not helpful", "the answer was wrong"]
+    )
 
 
 class ChatbotFeedbackResponse(BaseModel):

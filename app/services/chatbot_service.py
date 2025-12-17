@@ -443,10 +443,19 @@ Answer:"""
         if language != "en" and language in settings.SUPPORTED_LANGUAGES:
             answer = await ChatbotService.translate_text(answer, "en", language)
         
+        # Parse user_id - support both UUID and non-UUID strings
+        parsed_user_id = None
+        if user_id:
+            try:
+                parsed_user_id = uuid.UUID(user_id)
+            except (ValueError, TypeError):
+                # Non-UUID user_id - generate deterministic UUID from string
+                parsed_user_id = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+        
         # Log the interaction
         log_entry = ChatbotLog(
             id=uuid.UUID(query_id),
-            user_id=uuid.UUID(user_id) if user_id else None,
+            user_id=parsed_user_id,
             query=query,
             response=answer,
             language=language,
@@ -461,7 +470,8 @@ Answer:"""
             "answer": answer,
             "source_docs": source_docs,
             "confidence": confidence,
-            "query_id": query_id
+            "query_id": query_id,
+            "user_id": str(parsed_user_id) if parsed_user_id else None
         }
 
     @staticmethod
@@ -526,15 +536,24 @@ Answer:"""
         # Chunk content
         chunks = ChatbotService.chunk_text(content_english)
         
+        # If no chunks created (short content), use the whole content as one chunk
+        if not chunks:
+            chunks = [content_english]
+        
+        logger.info(f"Document {doc_uuid}: Created {len(chunks)} chunks")
+        
         # Process each chunk
         chunks_indexed = 0
         
         for i, chunk in enumerate(chunks):
+            if not chunk.strip():
+                continue
+                
             # Generate embedding
             embedding = await ChatbotService.generate_embedding(chunk)
             
-            # Create vector ID
-            vector_id = f"{doc_uuid}_{i}"
+            # Create vector ID (use hash to ensure string format)
+            vector_id = hashlib.md5(f"{doc_uuid}_{i}".encode()).hexdigest()
             
             # Upsert to Qdrant
             payload = {
@@ -571,6 +590,24 @@ Answer:"""
             "message": f"Document synced with {chunks_indexed} chunks"
         }
 
+    # Valid feedback values (database constraint)
+    VALID_FEEDBACK = {"positive", "negative"}
+    
+    # Mapping from user-friendly feedback to DB values
+    FEEDBACK_MAPPING = {
+        "helpful": "positive",
+        "good": "positive",
+        "great": "positive",
+        "yes": "positive",
+        "positive": "positive",
+        "not_helpful": "negative",
+        "bad": "negative",
+        "incorrect": "negative",
+        "incomplete": "negative",
+        "no": "negative",
+        "negative": "negative",
+    }
+
     @staticmethod
     async def submit_feedback(
         db: AsyncSession,
@@ -578,9 +615,29 @@ Answer:"""
         user_id: Optional[str],
         feedback: str
     ) -> Dict[str, Any]:
-        """Submit feedback for a chatbot response."""
+        """Submit feedback for a chatbot response.
+        
+        Valid feedback values: 'positive', 'negative', 'helpful', 'not_helpful',
+        'good', 'bad', 'yes', 'no', 'incorrect', 'incomplete'
+        """
         try:
             query_uuid = uuid.UUID(query_id)
+            
+            # Map feedback to valid DB value
+            feedback_lower = feedback.lower().strip()
+            
+            # Check if it's a known mapping
+            if feedback_lower in ChatbotService.FEEDBACK_MAPPING:
+                db_feedback = ChatbotService.FEEDBACK_MAPPING[feedback_lower]
+            elif feedback_lower in ChatbotService.VALID_FEEDBACK:
+                db_feedback = feedback_lower
+            else:
+                # Default: positive if contains positive words, else negative
+                positive_words = {"good", "great", "helpful", "yes", "ok", "nice", "thank", "love"}
+                if any(word in feedback_lower for word in positive_words):
+                    db_feedback = "positive"
+                else:
+                    db_feedback = "negative"
             
             query = select(ChatbotLog).where(
                 ChatbotLog.id == query_uuid
@@ -589,17 +646,19 @@ Answer:"""
             log_entry = result.scalar_one_or_none()
             
             if log_entry:
-                log_entry.feedback = feedback
+                log_entry.feedback = db_feedback
                 await db.flush()
                 
                 return {
                     "success": True,
-                    "message": "Feedback recorded"
+                    "message": f"Feedback recorded as '{db_feedback}'",
+                    "original_feedback": feedback,
+                    "stored_feedback": db_feedback
                 }
             else:
                 return {
                     "success": False,
-                    "message": "Query not found"
+                    "message": "Query not found - make sure you're using the query_id from a previous /chatbot/ask response"
                 }
                 
         except Exception as e:
