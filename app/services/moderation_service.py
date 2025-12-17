@@ -411,7 +411,7 @@ class ModerationService:
             "confidence": round(confidence, 2),
             "flags": flags,
             "reasons": reasons,
-            "job_id": str(job.id) if job else None
+            "job_id": job.content_id if job else None
         }
 
     @staticmethod
