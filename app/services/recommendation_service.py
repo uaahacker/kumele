@@ -403,10 +403,54 @@ class RecommendationService:
             upcoming_events = result.scalars().all()
             
             if not upcoming_events:
+                # Return sample event recommendations when no events in DB
+                sample_events = [
+                    {
+                        "event_id": "sample-evt-1",
+                        "title": "Photography Walk in Central Park",
+                        "category": "photography",
+                        "event_date": (now + timedelta(days=3)).isoformat(),
+                        "score": 0.95,
+                        "reason": "Matches your interests"
+                    },
+                    {
+                        "event_id": "sample-evt-2",
+                        "title": "Beginner Yoga Session",
+                        "category": "yoga",
+                        "event_date": (now + timedelta(days=5)).isoformat(),
+                        "score": 0.88,
+                        "reason": "Popular in your area"
+                    },
+                    {
+                        "event_id": "sample-evt-3",
+                        "title": "Cooking Masterclass: Italian Cuisine",
+                        "category": "cooking",
+                        "event_date": (now + timedelta(days=7)).isoformat(),
+                        "score": 0.82,
+                        "reason": "Trending event"
+                    },
+                    {
+                        "event_id": "sample-evt-4",
+                        "title": "Hiking Adventure: Mountain Trail",
+                        "category": "hiking",
+                        "event_date": (now + timedelta(days=10)).isoformat(),
+                        "score": 0.78,
+                        "reason": "Based on similar users"
+                    },
+                    {
+                        "event_id": "sample-evt-5",
+                        "title": "Live Music Night: Jazz & Blues",
+                        "category": "music",
+                        "event_date": (now + timedelta(days=2)).isoformat(),
+                        "score": 0.75,
+                        "reason": "Happening soon"
+                    },
+                ]
                 return {
                     "user_id": str(user_id),
-                    "recommendations": [],
-                    "cached": False
+                    "recommendations": sample_events[:limit],
+                    "cached": False,
+                    "note": "Sample events - no real events in database yet"
                 }
             
             # Get host ratings for scoring
