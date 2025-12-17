@@ -1,0 +1,154 @@
+# Kumele AI/ML Backend - Docker Compose
+version: '3.8'
+
+services:
+  # Main API Application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kumele-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - kumele-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Celery Worker for background tasks
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kumele-worker
+    command: celery -A worker.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      - api
+      - redis
+    restart: unless-stopped
+    networks:
+      - kumele-network
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: kumele-postgres
+    environment:
+      - POSTGRES_USER=kumele
+      - POSTGRES_PASSWORD=kumele_pass
+      - POSTGRES_DB=kumele_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - kumele-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kumele -d kumele_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and task queue
+  redis:
+    image: redis:7-alpine
+    container_name: kumele-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - kumele-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: kumele-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - kumele-network
+
+  # LibreTranslate for translation
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: kumele-translate
+    ports:
+      - "5000:5000"
+    environment:
+      - LT_LOAD_ONLY=en,fr,es,zh,ar,de
+      - LT_DISABLE_FILES_TRANSLATION=true
+    volumes:
+      - translate_data:/home/libretranslate/.local
+    restart: unless-stopped
+    networks:
+      - kumele-network
+
+  # Text Generation Inference (TGI) for LLM
+  tgi:
+    image: ghcr.io/huggingface/text-generation-inference:latest
+    container_name: kumele-tgi
+    ports:
+      - "8080:80"
+    environment:
+      - MODEL_ID=mistralai/Mistral-7B-Instruct-v0.2
+      - QUANTIZE=bitsandbytes-nf4
+      - MAX_INPUT_LENGTH=2048
+      - MAX_TOTAL_TOKENS=4096
+    volumes:
+      - tgi_data:/data
+    restart: unless-stopped
+    networks:
+      - kumele-network
+
+  # Flower for Celery monitoring (optional)
+  flower:
+    image: mher/flower:0.9.7
+    container_name: kumele-flower
+    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - worker
+    restart: unless-stopped
+    networks:
+      - kumele-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  translate_data:
+  tgi_data:
+
+networks:
+  kumele-network:
+    driver: bridge
