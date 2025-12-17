@@ -243,8 +243,8 @@ async def add_ui_string(
     description="Submit a translation for review."
 )
 async def submit_translation(
-    string_id: str = Query(..., description="UI String ID"),
-    language: str = Query(..., description="Target language"),
+    string_key: str = Query(..., description="UI String key (e.g., 'common.submit')"),
+    language: str = Query(..., description="Target language (e.g., 'fr', 'es')"),
     translated_value: str = Query(..., description="Translated text"),
     translator_id: Optional[str] = Query(None, description="Translator user ID"),
     db: AsyncSession = Depends(get_db)
@@ -253,7 +253,7 @@ async def submit_translation(
     try:
         result = await TranslationService.submit_translation(
             db=db,
-            string_id=string_id,
+            string_key=string_key,
             language=language,
             translated_value=translated_value,
             translator_id=translator_id

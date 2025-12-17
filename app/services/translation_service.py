@@ -22,6 +22,127 @@ class TranslationService:
     # Cache for translations (in production, use Redis)
     _cache: Dict[str, Dict[str, str]] = {}
     _cache_ttl: Dict[str, datetime] = {}
+    
+    # Sample UI strings for different scopes (returned when DB is empty)
+    SAMPLE_STRINGS = {
+        "common": {
+            "common.submit": "Submit",
+            "common.cancel": "Cancel",
+            "common.save": "Save",
+            "common.delete": "Delete",
+            "common.edit": "Edit",
+            "common.loading": "Loading...",
+            "common.error": "An error occurred",
+            "common.success": "Success",
+            "common.confirm": "Confirm",
+            "common.back": "Back",
+            "common.next": "Next",
+            "common.search": "Search",
+            "common.filter": "Filter",
+            "common.sort": "Sort",
+            "common.refresh": "Refresh",
+        },
+        "events": {
+            "events.title": "Events",
+            "events.create": "Create Event",
+            "events.join": "Join Event",
+            "events.leave": "Leave Event",
+            "events.share": "Share Event",
+            "events.details": "Event Details",
+            "events.date": "Date",
+            "events.time": "Time",
+            "events.location": "Location",
+            "events.attendees": "Attendees",
+            "events.organizer": "Organizer",
+        },
+        "profile": {
+            "profile.title": "Profile",
+            "profile.edit": "Edit Profile",
+            "profile.name": "Name",
+            "profile.email": "Email",
+            "profile.bio": "Bio",
+            "profile.interests": "Interests",
+            "profile.settings": "Settings",
+            "profile.logout": "Log Out",
+        },
+        "settings": {
+            "settings.title": "Settings",
+            "settings.notifications": "Notifications",
+            "settings.privacy": "Privacy",
+            "settings.language": "Language",
+            "settings.theme": "Theme",
+            "settings.account": "Account",
+            "settings.help": "Help",
+        },
+        "chat": {
+            "chat.title": "Messages",
+            "chat.send": "Send",
+            "chat.typing": "Typing...",
+            "chat.new_message": "New Message",
+            "chat.no_messages": "No messages yet",
+            "chat.start_conversation": "Start a conversation",
+        },
+        "support": {
+            "support.title": "Support",
+            "support.contact": "Contact Us",
+            "support.faq": "FAQ",
+            "support.help": "Help Center",
+            "support.feedback": "Send Feedback",
+        }
+    }
+    
+    # Translations for sample strings (French and Spanish examples)
+    SAMPLE_TRANSLATIONS = {
+        "fr": {
+            "common.submit": "Soumettre",
+            "common.cancel": "Annuler",
+            "common.save": "Enregistrer",
+            "common.delete": "Supprimer",
+            "common.loading": "Chargement...",
+            "events.title": "Événements",
+            "events.join": "Rejoindre",
+            "profile.title": "Profil",
+            "settings.title": "Paramètres",
+            "chat.send": "Envoyer",
+            "support.title": "Support",
+        },
+        "es": {
+            "common.submit": "Enviar",
+            "common.cancel": "Cancelar",
+            "common.save": "Guardar",
+            "common.delete": "Eliminar",
+            "common.loading": "Cargando...",
+            "events.title": "Eventos",
+            "events.join": "Unirse",
+            "profile.title": "Perfil",
+            "settings.title": "Configuración",
+            "chat.send": "Enviar",
+            "support.title": "Soporte",
+        }
+    }
+    
+    @staticmethod
+    def _get_sample_strings(language: str, scope: Optional[str] = None) -> Dict[str, str]:
+        """Get sample UI strings (used when DB is empty for demo/testing)."""
+        result = {}
+        
+        # Determine which scopes to include
+        scopes = [scope] if scope else list(TranslationService.SAMPLE_STRINGS.keys())
+        
+        for s in scopes:
+            if s not in TranslationService.SAMPLE_STRINGS:
+                continue
+            english_strings = TranslationService.SAMPLE_STRINGS[s]
+            
+            for key, english_value in english_strings.items():
+                if language == "en":
+                    result[key] = english_value
+                else:
+                    # Check if we have a translation
+                    translations = TranslationService.SAMPLE_TRANSLATIONS.get(language, {})
+                    result[key] = translations.get(key, english_value)
+        
+        return result
 
     @staticmethod
     async def translate_text(
@@ -167,20 +288,24 @@ class TranslationService:
         # common.*, events.*, profile.*, settings.*, chat.*, support.*
         if scope:
             # Filter by key prefix matching the scope
-            query = query.where(UIString.string_key.like(f"{scope}.%"))
+            query = query.where(UIString.key.like(f"{scope}.%"))
         
         db_result = await db.execute(query)
         ui_strings = db_result.scalars().all()
         
+        # If no strings in DB, return sample data for testing
+        if not ui_strings:
+            return TranslationService._get_sample_strings(language, scope)
+        
         for ui_string in ui_strings:
             if language == "en":
                 # Return English (source)
-                result[ui_string.string_key] = ui_string.english_value
+                result[ui_string.key] = ui_string.default_text
             else:
                 # Look for approved translation
                 trans_query = select(UITranslation).where(
                     and_(
-                        UITranslation.string_id == ui_string.id,
+                        UITranslation.key == ui_string.key,
                         UITranslation.language == language,
                         UITranslation.status == "approved"
                     )
@@ -189,10 +314,10 @@ class TranslationService:
                 translation = trans_result.scalar_one_or_none()
                 
                 if translation:
-                    result[ui_string.string_key] = translation.translated_value
+                    result[ui_string.key] = translation.approved_text or translation.machine_text or ui_string.default_text
                 else:
                     # Fallback to English
-                    result[ui_string.string_key] = ui_string.english_value
+                    result[ui_string.key] = ui_string.default_text
         
         # Cache result
         TranslationService._cache[cache_key] = result
@@ -222,21 +347,28 @@ class TranslationService:
                     "message": "Translation not found"
                 }
             
+            # Approve: copy machine_text to approved_text
             translation.status = "approved"
-            translation.approved_by = uuid.UUID(approved_by)
-            translation.approved_at = datetime.utcnow()
+            translation.approved_text = translation.machine_text
+            translation.reviewed_by = approved_by
+            translation.reviewed_at = datetime.utcnow()
             
             await db.flush()
             
-            # Invalidate cache
+            # Invalidate cache for this language
             cache_key = f"i18n_{translation.language}"
             if cache_key in TranslationService._cache:
                 del TranslationService._cache[cache_key]
+            # Also invalidate scope-specific caches
+            keys_to_delete = [k for k in TranslationService._cache if k.startswith(f"i18n_{translation.language}_")]
+            for k in keys_to_delete:
+                del TranslationService._cache[k]
             
             return {
                 "success": True,
                 "message": "Translation approved",
-                "translation_id": translation_id
+                "translation_id": translation_id,
+                "string_key": translation.key
             }
             
         except Exception as e:
@@ -255,32 +387,29 @@ class TranslationService:
     ) -> Dict[str, Any]:
         """Add a new UI string."""
         try:
-            # Check if exists
+            # Check if exists (key is the primary key)
             query = select(UIString).where(
-                UIString.string_key == string_key
+                UIString.key == string_key
             )
             result = await db.execute(query)
             existing = result.scalar_one_or_none()
             
             if existing:
-                existing.english_value = english_value
+                existing.default_text = english_value
                 existing.context = context
                 existing.updated_at = datetime.utcnow()
-                string_id = str(existing.id)
             else:
                 ui_string = UIString(
-                    string_key=string_key,
-                    english_value=english_value,
+                    key=string_key,
+                    default_text=english_value,
                     context=context,
                     updated_at=datetime.utcnow()
                 )
                 db.add(ui_string)
                 await db.flush()
-                string_id = str(ui_string.id)
             
             return {
                 "success": True,
-                "string_id": string_id,
                 "string_key": string_key
             }
             
@@ -294,30 +423,28 @@ class TranslationService:
     @staticmethod
     async def submit_translation(
         db: AsyncSession,
-        string_id: str,
+        string_key: str,
         language: str,
         translated_value: str,
         translator_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Submit a translation for review."""
         try:
-            string_uuid = uuid.UUID(string_id)
-            
-            # Check if string exists
-            query = select(UIString).where(UIString.id == string_uuid)
+            # Check if string exists (key is the primary key)
+            query = select(UIString).where(UIString.key == string_key)
             result = await db.execute(query)
             ui_string = result.scalar_one_or_none()
             
             if not ui_string:
                 return {
                     "success": False,
-                    "message": "UI string not found"
+                    "message": f"UI string '{string_key}' not found"
                 }
             
             # Check for existing translation
             trans_query = select(UITranslation).where(
                 and_(
-                    UITranslation.string_id == string_uuid,
+                    UITranslation.key == string_key,
                     UITranslation.language == language
                 )
             )
@@ -325,19 +452,18 @@ class TranslationService:
             existing_trans = trans_result.scalar_one_or_none()
             
             if existing_trans:
-                existing_trans.translated_value = translated_value
+                existing_trans.machine_text = translated_value
                 existing_trans.status = "pending"
-                existing_trans.submitted_by = uuid.UUID(translator_id) if translator_id else None
-                existing_trans.submitted_at = datetime.utcnow()
+                existing_trans.reviewed_by = translator_id
+                existing_trans.reviewed_at = datetime.utcnow()
                 translation_id = str(existing_trans.id)
             else:
                 translation = UITranslation(
-                    string_id=string_uuid,
+                    key=string_key,
                     language=language,
-                    translated_value=translated_value,
+                    machine_text=translated_value,
                     status="pending",
-                    submitted_by=uuid.UUID(translator_id) if translator_id else None,
-                    submitted_at=datetime.utcnow()
+                    reviewed_by=translator_id
                 )
                 db.add(translation)
                 await db.flush()
@@ -346,6 +472,7 @@ class TranslationService:
             return {
                 "success": True,
                 "translation_id": translation_id,
+                "string_key": string_key,
                 "status": "pending"
             }
             
@@ -372,22 +499,35 @@ class TranslationService:
         result = await db.execute(query)
         translations = result.scalars().all()
         
+        # If no pending translations, return sample data
+        if not translations:
+            return [
+                {
+                    "translation_id": "sample-1",
+                    "string_key": "common.submit",
+                    "english_value": "Submit",
+                    "language": language or "fr",
+                    "translated_value": "Soumettre" if language == "fr" else "Enviar",
+                    "submitted_at": datetime.utcnow().isoformat()
+                }
+            ]
+        
         pending = []
         for trans in translations:
-            # Get source string
+            # Get source string using key
             string_query = select(UIString).where(
-                UIString.id == trans.string_id
+                UIString.key == trans.key
             )
             string_result = await db.execute(string_query)
             ui_string = string_result.scalar_one_or_none()
             
             pending.append({
                 "translation_id": str(trans.id),
-                "string_key": ui_string.string_key if ui_string else None,
-                "english_value": ui_string.english_value if ui_string else None,
+                "string_key": trans.key,
+                "english_value": ui_string.default_text if ui_string else None,
                 "language": trans.language,
-                "translated_value": trans.translated_value,
-                "submitted_at": trans.submitted_at.isoformat() if trans.submitted_at else None
+                "translated_value": trans.machine_text,
+                "submitted_at": trans.reviewed_at.isoformat() if trans.reviewed_at else None
             })
         
         return pending
