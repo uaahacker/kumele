@@ -253,13 +253,28 @@ class NLPService:
     @staticmethod
     async def update_topic_daily(
         db: AsyncSession,
-        keywords: List[str],
+        topic: str = None,
+        keywords: List[str] = None,
+        category: Optional[str] = None,
         location: Optional[str] = None
     ):
-        """Update daily topic aggregates for trend detection."""
+        """Update daily topic aggregates for trend detection.
+        
+        Can be called with either:
+        - topic: A single topic string (from API)
+        - keywords: A list of keywords (from internal use)
+        """
         today = date.today()
         
-        for keyword in keywords:
+        # Handle both single topic and list of keywords
+        if topic:
+            keywords_to_process = [topic]
+        elif keywords:
+            keywords_to_process = keywords
+        else:
+            return  # Nothing to process
+        
+        for keyword in keywords_to_process:
             # Check if entry exists
             query = select(NLPTopicDaily).where(
                 and_(
@@ -274,10 +289,13 @@ class NLPService:
             if existing:
                 existing.mentions = (existing.mentions or 0) + 1
                 existing.weighted_score = (existing.weighted_score or 0) + 1.0
+                # Update category if provided
+                if category and hasattr(existing, 'category'):
+                    existing.category = category
             else:
                 new_topic = NLPTopicDaily(
                     topic=keyword,
-                    topic_type="keyword",
+                    topic_type=category or "keyword",
                     ds=today,
                     location=location,
                     mentions=1,

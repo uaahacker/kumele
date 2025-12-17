@@ -4,7 +4,7 @@ Handles toxicity, hate speech, NSFW detection.
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, and_
 from datetime import datetime
 import logging
 import re
@@ -491,3 +491,239 @@ class ModerationService:
             "reviewed_at": job.reviewed_at,
             "reviewer_notes": job.reviewer_notes if hasattr(job, 'reviewer_notes') else None
         }
+
+    @staticmethod
+    async def manual_review(
+        db: AsyncSession,
+        content_id: str,
+        decision: str,
+        reviewer_id: str,
+        notes: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Submit manual review decision for flagged content."""
+        try:
+            # Find the moderation job
+            query = select(ModerationJob).where(
+                ModerationJob.content_id == content_id
+            )
+            result = await db.execute(query)
+            job = result.scalar_one_or_none()
+            
+            if not job:
+                return {"error": f"Content '{content_id}' not found"}
+            
+            # Update the job with review decision
+            job.status = "reviewed"
+            job.decision = decision
+            job.reviewed_at = datetime.utcnow()
+            
+            # Store reviewer info in labels if no dedicated field
+            if hasattr(job, 'reviewer_id'):
+                job.reviewer_id = reviewer_id
+            if hasattr(job, 'reviewer_notes'):
+                job.reviewer_notes = notes
+            
+            # Add review info to labels
+            review_info = {
+                "review_decision": decision,
+                "reviewer_id": reviewer_id,
+                "review_notes": notes,
+                "reviewed_at": datetime.utcnow().isoformat()
+            }
+            
+            if job.labels:
+                job.labels.append(review_info)
+            else:
+                job.labels = [review_info]
+            
+            await db.flush()
+            
+            return {
+                "success": True,
+                "content_id": content_id,
+                "decision": decision,
+                "reviewer_id": reviewer_id,
+                "notes": notes,
+                "reviewed_at": datetime.utcnow().isoformat(),
+                "message": f"Content {decision}d successfully"
+            }
+            
+        except Exception as e:
+            logger.error(f"Manual review error: {e}")
+            return {"error": str(e)}
+
+    @staticmethod
+    async def get_pending_reviews(
+        db: AsyncSession,
+        limit: int = 50,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """Get content flagged for manual review."""
+        try:
+            # Query for pending/flagged content
+            query = select(ModerationJob).where(
+                ModerationJob.status.in_(["pending", "flagged", "flag_for_review"])
+            ).order_by(ModerationJob.created_at.desc()).offset(offset).limit(limit)
+            
+            result = await db.execute(query)
+            jobs = result.scalars().all()
+            
+            # Count total pending
+            count_query = select(func.count(ModerationJob.id)).where(
+                ModerationJob.status.in_(["pending", "flagged", "flag_for_review"])
+            )
+            count_result = await db.execute(count_query)
+            total = count_result.scalar() or 0
+            
+            if not jobs:
+                # Return sample pending items when no real data
+                return {
+                    "pending_items": [
+                        {
+                            "content_id": "sample-pending-1",
+                            "content_type": "text",
+                            "status": "flag_for_review",
+                            "created_at": datetime.utcnow().isoformat(),
+                            "flags": [
+                                {"flag_type": "toxicity", "score": 0.65, "threshold": 0.60}
+                            ],
+                            "preview": "Sample flagged content...",
+                            "note": "Sample data - no real pending reviews"
+                        }
+                    ],
+                    "total": 1,
+                    "offset": offset,
+                    "limit": limit,
+                    "note": "Sample data - submit content via /moderation endpoint to create real reviews"
+                }
+            
+            pending_items = []
+            for job in jobs:
+                flags = []
+                if job.labels:
+                    for label in job.labels:
+                        if isinstance(label, dict) and "label" in label:
+                            flags.append({
+                                "flag_type": label.get("label", ""),
+                                "score": label.get("score", 0),
+                                "threshold": label.get("threshold", 0.5)
+                            })
+                
+                pending_items.append({
+                    "content_id": job.content_id,
+                    "content_type": job.content_type,
+                    "status": job.status,
+                    "created_at": job.created_at.isoformat() if job.created_at else None,
+                    "flags": flags,
+                    "user_id": job.user_id if hasattr(job, 'user_id') else None
+                })
+            
+            return {
+                "pending_items": pending_items,
+                "total": total,
+                "offset": offset,
+                "limit": limit
+            }
+            
+        except Exception as e:
+            logger.error(f"Get pending reviews error: {e}")
+            return {
+                "pending_items": [],
+                "total": 0,
+                "offset": offset,
+                "limit": limit,
+                "error": str(e)
+            }
+
+    @staticmethod
+    async def get_stats(
+        db: AsyncSession,
+        days: int = 7
+    ) -> Dict[str, Any]:
+        """Get moderation statistics."""
+        try:
+            from datetime import timedelta
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            
+            # Count by status
+            status_query = select(
+                ModerationJob.status,
+                func.count(ModerationJob.id).label("count")
+            ).where(
+                ModerationJob.created_at >= cutoff
+            ).group_by(ModerationJob.status)
+            
+            status_result = await db.execute(status_query)
+            status_counts = {row.status: row.count for row in status_result.fetchall()}
+            
+            # Count by decision
+            decision_query = select(
+                ModerationJob.decision,
+                func.count(ModerationJob.id).label("count")
+            ).where(
+                and_(
+                    ModerationJob.created_at >= cutoff,
+                    ModerationJob.decision.isnot(None)
+                )
+            ).group_by(ModerationJob.decision)
+            
+            decision_result = await db.execute(decision_query)
+            decision_counts = {row.decision: row.count for row in decision_result.fetchall()}
+            
+            # Count by content type
+            type_query = select(
+                ModerationJob.content_type,
+                func.count(ModerationJob.id).label("count")
+            ).where(
+                ModerationJob.created_at >= cutoff
+            ).group_by(ModerationJob.content_type)
+            
+            type_result = await db.execute(type_query)
+            type_counts = {row.content_type: row.count for row in type_result.fetchall()}
+            
+            # Total count
+            total_query = select(func.count(ModerationJob.id)).where(
+                ModerationJob.created_at >= cutoff
+            )
+            total_result = await db.execute(total_query)
+            total = total_result.scalar() or 0
+            
+            if total == 0:
+                # Return sample stats
+                return {
+                    "period_days": days,
+                    "total_items": 0,
+                    "by_status": {
+                        "approved": 0,
+                        "rejected": 0,
+                        "pending": 0,
+                        "flagged": 0
+                    },
+                    "by_decision": {
+                        "approve": 0,
+                        "reject": 0,
+                        "flag_for_review": 0
+                    },
+                    "by_content_type": {
+                        "text": 0,
+                        "image": 0,
+                        "video": 0
+                    },
+                    "note": "No moderation data yet - submit content via /moderation endpoint"
+                }
+            
+            return {
+                "period_days": days,
+                "total_items": total,
+                "by_status": status_counts,
+                "by_decision": decision_counts,
+                "by_content_type": type_counts
+            }
+            
+        except Exception as e:
+            logger.error(f"Get stats error: {e}")
+            return {
+                "period_days": days,
+                "total_items": 0,
+                "error": str(e)
+            }
