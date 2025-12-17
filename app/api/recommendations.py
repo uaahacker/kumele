@@ -114,14 +114,14 @@ async def refresh_recommendations(
             db=db,
             user_id=user_id,
             rec_type="hobby",
-            recommendations=hobbies["recommendations"]
+            recommendations=hobbies.get("recommendations", [])
         )
         
         await RecommendationService.cache_recommendations(
             db=db,
             user_id=user_id,
             rec_type="event",
-            recommendations=events["recommendations"]
+            recommendations=events.get("recommendations", [])
         )
         
         await db.commit()
@@ -129,8 +129,8 @@ async def refresh_recommendations(
         return {
             "success": True,
             "message": "Recommendations refreshed",
-            "hobby_count": len(hobbies["recommendations"]),
-            "event_count": len(events["recommendations"])
+            "hobby_count": len(hobbies.get("recommendations", [])),
+            "event_count": len(events.get("recommendations", []))
         }
         
     except Exception as e:
