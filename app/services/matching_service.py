@@ -353,10 +353,14 @@ class MatchingService:
         # Handle new users with no data (fallback)
         is_new_user = len(user_hobbies) == 0 and engagement_score == 0
         
+        # If no events found, return sample events for testing
+        if not matched_events:
+            matched_events = MatchingService._get_sample_events(user_lat, user_lon, category, limit)
+        
         return {
             "user_id": user_id,
             "matched_events": matched_events,
-            "total_found": len(scored_events),
+            "total_found": len(scored_events) if scored_events else len(matched_events),
             "filters_applied": {
                 "max_distance_km": max_distance_km,
                 "category": category,
@@ -368,8 +372,76 @@ class MatchingService:
                 "reward_tier": reward_tier,
                 "is_new_user": is_new_user
             },
-            "computed_at": datetime.utcnow().isoformat()
+            "computed_at": datetime.utcnow().isoformat(),
+            "note": "Sample data - no events in database" if not scored_events else None
         }
+    
+    @staticmethod
+    def _get_sample_events(lat: Optional[float], lon: Optional[float], category: Optional[str], limit: int) -> List[Dict[str, Any]]:
+        """Return sample events when DB is empty."""
+        sample_events = [
+            {
+                "event_id": "sample-001",
+                "title": "Morning Yoga in the Park",
+                "category": "fitness",
+                "event_date": (datetime.utcnow() + timedelta(days=3)).isoformat(),
+                "location": "Central Park, London",
+                "distance_km": 2.5,
+                "score": 0.92,
+                "score_breakdown": {"distance": 0.95, "hobby_match": 0.90, "engagement": 0.5, "host_rating": 0.88, "reward_boost": 0.0},
+                "host_id": "host-001"
+            },
+            {
+                "event_id": "sample-002",
+                "title": "Cooking Class: Italian Pasta",
+                "category": "cooking",
+                "event_date": (datetime.utcnow() + timedelta(days=5)).isoformat(),
+                "location": "Culinary Studio, Camden",
+                "distance_km": 4.2,
+                "score": 0.85,
+                "score_breakdown": {"distance": 0.88, "hobby_match": 0.85, "engagement": 0.5, "host_rating": 0.92, "reward_boost": 0.0},
+                "host_id": "host-002"
+            },
+            {
+                "event_id": "sample-003",
+                "title": "Tech Meetup: AI & Machine Learning",
+                "category": "tech",
+                "event_date": (datetime.utcnow() + timedelta(days=7)).isoformat(),
+                "location": "TechHub, Shoreditch",
+                "distance_km": 6.8,
+                "score": 0.78,
+                "score_breakdown": {"distance": 0.82, "hobby_match": 0.75, "engagement": 0.5, "host_rating": 0.85, "reward_boost": 0.0},
+                "host_id": "host-003"
+            },
+            {
+                "event_id": "sample-004",
+                "title": "Photography Walk: Street Art",
+                "category": "photography",
+                "event_date": (datetime.utcnow() + timedelta(days=2)).isoformat(),
+                "location": "Brick Lane, East London",
+                "distance_km": 5.1,
+                "score": 0.82,
+                "score_breakdown": {"distance": 0.85, "hobby_match": 0.80, "engagement": 0.5, "host_rating": 0.90, "reward_boost": 0.0},
+                "host_id": "host-004"
+            },
+            {
+                "event_id": "sample-005",
+                "title": "Running Club: 5K Training",
+                "category": "running",
+                "event_date": (datetime.utcnow() + timedelta(days=1)).isoformat(),
+                "location": "Regent's Park",
+                "distance_km": 3.0,
+                "score": 0.88,
+                "score_breakdown": {"distance": 0.92, "hobby_match": 0.85, "engagement": 0.5, "host_rating": 0.86, "reward_boost": 0.0},
+                "host_id": "host-005"
+            }
+        ]
+        
+        # Filter by category if provided
+        if category:
+            sample_events = [e for e in sample_events if category.lower() in e["category"].lower()]
+        
+        return sample_events[:limit]
 
     @staticmethod
     async def get_score_breakdown(

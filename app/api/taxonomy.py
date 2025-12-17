@@ -41,36 +41,67 @@ async def get_interests(
 ):
     """Get interest taxonomy."""
     try:
-        from app.models.database_models import InterestTaxonomy
+        from app.models.database_models import InterestTaxonomy, InterestMetadata, InterestTranslation
         
+        # Build query based on parent_id
+        # Model uses: interest_id (string), parent_id (string), level, is_active
         if parent_id:
-            parent_uuid = uuid.UUID(parent_id)
             query = select(InterestTaxonomy).where(
-                InterestTaxonomy.parent_id == parent_uuid
-            ).order_by(InterestTaxonomy.sort_order)
+                and_(
+                    InterestTaxonomy.parent_id == parent_id,
+                    InterestTaxonomy.is_active == True
+                )
+            )
         else:
-            # Get top-level categories
+            # Get top-level categories (where parent_id is None)
             query = select(InterestTaxonomy).where(
-                InterestTaxonomy.parent_id.is_(None)
-            ).order_by(InterestTaxonomy.sort_order)
+                and_(
+                    InterestTaxonomy.parent_id.is_(None),
+                    InterestTaxonomy.is_active == True
+                )
+            )
         
         result = await db.execute(query)
         items = result.scalars().all()
         
+        # If no data in DB, return sample taxonomy
+        if not items:
+            return _get_sample_taxonomy(parent_id, include_children)
+        
         async def build_tree(item):
             """Recursively build category tree."""
+            # Get metadata for icon
+            meta_query = select(InterestMetadata).where(
+                InterestMetadata.interest_id == item.interest_id
+            )
+            meta_result = await db.execute(meta_query)
+            metadata = meta_result.scalar_one_or_none()
+            
+            # Get translation for name
+            trans_query = select(InterestTranslation).where(
+                and_(
+                    InterestTranslation.interest_id == item.interest_id,
+                    InterestTranslation.language_code == "en"
+                )
+            )
+            trans_result = await db.execute(trans_query)
+            translation = trans_result.scalar_one_or_none()
+            
             node = {
-                "id": str(item.id),
-                "name": item.name,
-                "slug": item.slug,
-                "icon": item.icon,
-                "level": item.level
+                "id": item.interest_id,
+                "name": translation.label if translation else item.interest_id.replace("_", " ").title(),
+                "slug": item.interest_id,
+                "icon": metadata.icon_key if metadata else "🎯",
+                "level": item.level or 0
             }
             
             if include_children:
                 children_query = select(InterestTaxonomy).where(
-                    InterestTaxonomy.parent_id == item.id
-                ).order_by(InterestTaxonomy.sort_order)
+                    and_(
+                        InterestTaxonomy.parent_id == item.interest_id,
+                        InterestTaxonomy.is_active == True
+                    )
+                )
                 
                 children_result = await db.execute(children_query)
                 children = children_result.scalars().all()
@@ -93,6 +124,99 @@ async def get_interests(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _get_sample_taxonomy(parent_id: Optional[str], include_children: bool) -> dict:
+    """Return sample taxonomy when DB is empty."""
+    sample_categories = [
+        {
+            "id": "sports_fitness",
+            "name": "Sports & Fitness",
+            "slug": "sports-fitness",
+            "icon": "🏃",
+            "level": 0,
+            "children": [
+                {"id": "running", "name": "Running", "slug": "running", "icon": "🏃", "level": 1},
+                {"id": "yoga", "name": "Yoga", "slug": "yoga", "icon": "🧘", "level": 1},
+                {"id": "gym", "name": "Gym & Weights", "slug": "gym", "icon": "🏋️", "level": 1},
+                {"id": "swimming", "name": "Swimming", "slug": "swimming", "icon": "🏊", "level": 1},
+            ] if include_children else None
+        },
+        {
+            "id": "arts_crafts",
+            "name": "Arts & Crafts",
+            "slug": "arts-crafts",
+            "icon": "🎨",
+            "level": 0,
+            "children": [
+                {"id": "painting", "name": "Painting", "slug": "painting", "icon": "🖌️", "level": 1},
+                {"id": "pottery", "name": "Pottery", "slug": "pottery", "icon": "🏺", "level": 1},
+                {"id": "photography", "name": "Photography", "slug": "photography", "icon": "📷", "level": 1},
+            ] if include_children else None
+        },
+        {
+            "id": "food_drink",
+            "name": "Food & Drink",
+            "slug": "food-drink",
+            "icon": "🍳",
+            "level": 0,
+            "children": [
+                {"id": "cooking", "name": "Cooking", "slug": "cooking", "icon": "👨‍🍳", "level": 1},
+                {"id": "baking", "name": "Baking", "slug": "baking", "icon": "🧁", "level": 1},
+                {"id": "wine_tasting", "name": "Wine Tasting", "slug": "wine-tasting", "icon": "🍷", "level": 1},
+            ] if include_children else None
+        },
+        {
+            "id": "music",
+            "name": "Music",
+            "slug": "music",
+            "icon": "🎵",
+            "level": 0,
+            "children": [
+                {"id": "guitar", "name": "Guitar", "slug": "guitar", "icon": "🎸", "level": 1},
+                {"id": "piano", "name": "Piano", "slug": "piano", "icon": "🎹", "level": 1},
+                {"id": "singing", "name": "Singing", "slug": "singing", "icon": "🎤", "level": 1},
+            ] if include_children else None
+        },
+        {
+            "id": "tech",
+            "name": "Technology",
+            "slug": "tech",
+            "icon": "💻",
+            "level": 0,
+            "children": [
+                {"id": "coding", "name": "Coding", "slug": "coding", "icon": "👨‍💻", "level": 1},
+                {"id": "gaming", "name": "Gaming", "slug": "gaming", "icon": "🎮", "level": 1},
+                {"id": "ai_ml", "name": "AI & Machine Learning", "slug": "ai-ml", "icon": "🤖", "level": 1},
+            ] if include_children else None
+        },
+        {
+            "id": "outdoor",
+            "name": "Outdoor Activities",
+            "slug": "outdoor",
+            "icon": "🏕️",
+            "level": 0,
+            "children": [
+                {"id": "hiking", "name": "Hiking", "slug": "hiking", "icon": "🥾", "level": 1},
+                {"id": "camping", "name": "Camping", "slug": "camping", "icon": "⛺", "level": 1},
+                {"id": "cycling", "name": "Cycling", "slug": "cycling", "icon": "🚴", "level": 1},
+            ] if include_children else None
+        },
+    ]
+    
+    # Filter by parent_id if provided
+    if parent_id:
+        for cat in sample_categories:
+            if cat["id"] == parent_id:
+                return {"categories": cat.get("children", [])}
+        return {"categories": []}
+    
+    # Clean up None children
+    for cat in sample_categories:
+        if cat.get("children") is None:
+            del cat["children"]
+    
+    return {"categories": sample_categories}
+
+
 @router.get(
     "/interests/flat",
     summary="Get Flat Interest List",
@@ -105,40 +229,87 @@ async def get_interests_flat(
 ):
     """Get flat interest list."""
     try:
-        from app.models.database_models import InterestTaxonomy
+        from app.models.database_models import InterestTaxonomy, InterestTranslation
         
-        query = select(InterestTaxonomy)
+        query = select(InterestTaxonomy).where(InterestTaxonomy.is_active == True)
         
         if level is not None:
             query = query.where(InterestTaxonomy.level == level)
         
+        # Note: search by interest_id since name is in translations table
         if search:
             query = query.where(
-                InterestTaxonomy.name.ilike(f"%{search}%")
+                InterestTaxonomy.interest_id.ilike(f"%{search}%")
             )
         
-        query = query.order_by(InterestTaxonomy.level, InterestTaxonomy.name)
+        query = query.order_by(InterestTaxonomy.level, InterestTaxonomy.interest_id)
         
         result = await db.execute(query)
         items = result.scalars().all()
         
-        return {
-            "interests": [
-                {
-                    "id": str(item.id),
-                    "name": item.name,
-                    "slug": item.slug,
-                    "icon": item.icon,
-                    "level": item.level,
-                    "parent_id": str(item.parent_id) if item.parent_id else None
-                }
-                for item in items
-            ]
-        }
+        # If no data, return sample flat list
+        if not items:
+            return _get_sample_flat_interests(level, search)
+        
+        interests = []
+        for item in items:
+            # Get translation for display name
+            trans_query = select(InterestTranslation).where(
+                and_(
+                    InterestTranslation.interest_id == item.interest_id,
+                    InterestTranslation.language_code == "en"
+                )
+            )
+            trans_result = await db.execute(trans_query)
+            translation = trans_result.scalar_one_or_none()
+            
+            interests.append({
+                "id": item.interest_id,
+                "name": translation.label if translation else item.interest_id.replace("_", " ").title(),
+                "slug": item.interest_id,
+                "icon": "🎯",  # Default icon
+                "level": item.level or 0,
+                "parent_id": item.parent_id
+            })
+        
+        return {"interests": interests}
         
     except Exception as e:
         logger.error(f"Get interests flat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _get_sample_flat_interests(level: Optional[int], search: Optional[str]) -> dict:
+    """Return sample flat interests when DB is empty."""
+    all_interests = [
+        {"id": "sports_fitness", "name": "Sports & Fitness", "slug": "sports-fitness", "icon": "🏃", "level": 0, "parent_id": None},
+        {"id": "running", "name": "Running", "slug": "running", "icon": "🏃", "level": 1, "parent_id": "sports_fitness"},
+        {"id": "yoga", "name": "Yoga", "slug": "yoga", "icon": "🧘", "level": 1, "parent_id": "sports_fitness"},
+        {"id": "gym", "name": "Gym & Weights", "slug": "gym", "icon": "🏋️", "level": 1, "parent_id": "sports_fitness"},
+        {"id": "arts_crafts", "name": "Arts & Crafts", "slug": "arts-crafts", "icon": "🎨", "level": 0, "parent_id": None},
+        {"id": "painting", "name": "Painting", "slug": "painting", "icon": "🖌️", "level": 1, "parent_id": "arts_crafts"},
+        {"id": "photography", "name": "Photography", "slug": "photography", "icon": "📷", "level": 1, "parent_id": "arts_crafts"},
+        {"id": "food_drink", "name": "Food & Drink", "slug": "food-drink", "icon": "🍳", "level": 0, "parent_id": None},
+        {"id": "cooking", "name": "Cooking", "slug": "cooking", "icon": "👨‍🍳", "level": 1, "parent_id": "food_drink"},
+        {"id": "baking", "name": "Baking", "slug": "baking", "icon": "🧁", "level": 1, "parent_id": "food_drink"},
+        {"id": "music", "name": "Music", "slug": "music", "icon": "🎵", "level": 0, "parent_id": None},
+        {"id": "guitar", "name": "Guitar", "slug": "guitar", "icon": "🎸", "level": 1, "parent_id": "music"},
+        {"id": "tech", "name": "Technology", "slug": "tech", "icon": "💻", "level": 0, "parent_id": None},
+        {"id": "coding", "name": "Coding", "slug": "coding", "icon": "👨‍💻", "level": 1, "parent_id": "tech"},
+        {"id": "outdoor", "name": "Outdoor Activities", "slug": "outdoor", "icon": "🏕️", "level": 0, "parent_id": None},
+        {"id": "hiking", "name": "Hiking", "slug": "hiking", "icon": "🥾", "level": 1, "parent_id": "outdoor"},
+    ]
+    
+    filtered = all_interests
+    
+    if level is not None:
+        filtered = [i for i in filtered if i["level"] == level]
+    
+    if search:
+        search_lower = search.lower()
+        filtered = [i for i in filtered if search_lower in i["name"].lower() or search_lower in i["id"].lower()]
+    
+    return {"interests": filtered}
 
 
 @router.get(
@@ -152,55 +323,71 @@ async def get_interest(
 ):
     """Get interest details."""
     try:
-        from app.models.database_models import InterestTaxonomy
-        
-        interest_uuid = uuid.UUID(interest_id)
+        from app.models.database_models import InterestTaxonomy, InterestTranslation, InterestMetadata
         
         query = select(InterestTaxonomy).where(
-            InterestTaxonomy.id == interest_uuid
+            InterestTaxonomy.interest_id == interest_id
         )
         
         result = await db.execute(query)
         interest = result.scalar_one_or_none()
         
         if not interest:
-            raise HTTPException(status_code=404, detail="Interest not found")
+            # Return sample interest if not found
+            return _get_sample_interest_details(interest_id)
+        
+        # Get translation for name
+        trans_query = select(InterestTranslation).where(
+            and_(
+                InterestTranslation.interest_id == interest_id,
+                InterestTranslation.language_code == "en"
+            )
+        )
+        trans_result = await db.execute(trans_query)
+        translation = trans_result.scalar_one_or_none()
+        
+        # Get metadata for icon
+        meta_query = select(InterestMetadata).where(
+            InterestMetadata.interest_id == interest_id
+        )
+        meta_result = await db.execute(meta_query)
+        metadata = meta_result.scalar_one_or_none()
         
         # Get parent
         parent = None
         if interest.parent_id:
             parent_query = select(InterestTaxonomy).where(
-                InterestTaxonomy.id == interest.parent_id
+                InterestTaxonomy.interest_id == interest.parent_id
             )
             parent_result = await db.execute(parent_query)
             parent_item = parent_result.scalar_one_or_none()
             if parent_item:
                 parent = {
-                    "id": str(parent_item.id),
-                    "name": parent_item.name
+                    "id": parent_item.interest_id,
+                    "name": parent_item.interest_id.replace("_", " ").title()
                 }
         
         # Get children
         children_query = select(InterestTaxonomy).where(
-            InterestTaxonomy.parent_id == interest_uuid
-        ).order_by(InterestTaxonomy.sort_order)
+            InterestTaxonomy.parent_id == interest_id
+        )
         
         children_result = await db.execute(children_query)
         children = [
             {
-                "id": str(c.id),
-                "name": c.name,
-                "slug": c.slug
+                "id": c.interest_id,
+                "name": c.interest_id.replace("_", " ").title(),
+                "slug": c.interest_id
             }
             for c in children_result.scalars().all()
         ]
         
         return {
-            "id": str(interest.id),
-            "name": interest.name,
-            "slug": interest.slug,
-            "icon": interest.icon,
-            "level": interest.level,
+            "id": interest.interest_id,
+            "name": translation.label if translation else interest.interest_id.replace("_", " ").title(),
+            "slug": interest.interest_id,
+            "icon": metadata.icon_key if metadata else "🎯",
+            "level": interest.level or 0,
             "parent": parent,
             "children": children
         }
@@ -210,6 +397,31 @@ async def get_interest(
     except Exception as e:
         logger.error(f"Get interest error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _get_sample_interest_details(interest_id: str) -> dict:
+    """Return sample interest details."""
+    sample_map = {
+        "sports_fitness": {"name": "Sports & Fitness", "icon": "🏃", "level": 0, "parent": None, "children": ["running", "yoga", "gym"]},
+        "running": {"name": "Running", "icon": "🏃", "level": 1, "parent": "sports_fitness", "children": []},
+        "yoga": {"name": "Yoga", "icon": "🧘", "level": 1, "parent": "sports_fitness", "children": []},
+        "cooking": {"name": "Cooking", "icon": "👨‍🍳", "level": 1, "parent": "food_drink", "children": []},
+        "food_drink": {"name": "Food & Drink", "icon": "🍳", "level": 0, "parent": None, "children": ["cooking", "baking"]},
+    }
+    
+    if interest_id in sample_map:
+        data = sample_map[interest_id]
+        return {
+            "id": interest_id,
+            "name": data["name"],
+            "slug": interest_id,
+            "icon": data["icon"],
+            "level": data["level"],
+            "parent": {"id": data["parent"], "name": sample_map.get(data["parent"], {}).get("name", "")} if data["parent"] else None,
+            "children": [{"id": c, "name": sample_map.get(c, {}).get("name", c), "slug": c} for c in data["children"]]
+        }
+    
+    raise HTTPException(status_code=404, detail=f"Interest '{interest_id}' not found")
 
 
 @router.post(

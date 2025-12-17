@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 class PricingService:
     """Service for dynamic pricing and discount operations."""
     
+    # In-memory cache for pricing history (since DB schema doesn't match our needs)
+    _pricing_cache: Dict[str, List[Dict[str, Any]]] = {}
+    
     # Pricing model parameters
     BASE_DEMAND_MULTIPLIER = 1.0
     TIME_DECAY_FACTOR = 0.05  # Price increases as event approaches
@@ -198,22 +201,27 @@ class PricingService:
         data_quality = min(1.0, metrics.get("views", 0) / 100)
         confidence = 0.6 + (0.4 * data_quality)
         
-        # Store pricing history
-        try:
-            history = PricingHistory(
-                event_id=uuid.UUID(event_id),
-                base_price=base_price,
-                suggested_price=suggested_price,
-                time_factor=time_factor,
-                demand_factor=demand_factor,
-                seasonality_factor=seasonality_factor,
-                final_factor=combined_factor,
-                calculated_at=datetime.utcnow()
-            )
-            db.add(history)
-            await db.flush()
-        except Exception as e:
-            logger.warning(f"Failed to store pricing history: {e}")
+        # Store pricing history in memory cache (DB schema uses different columns)
+        # The PricingHistory table has: price, turnout, host_score, city, event_date, revenue
+        # But we need: base_price, suggested_price, time_factor, demand_factor, etc.
+        # Using in-memory cache for demo purposes
+        history_entry = {
+            "event_id": event_id,
+            "base_price": base_price,
+            "suggested_price": suggested_price,
+            "time_factor": time_factor,
+            "demand_factor": demand_factor,
+            "seasonality_factor": seasonality_factor,
+            "final_factor": combined_factor,
+            "calculated_at": datetime.utcnow().isoformat()
+        }
+        
+        # Store in class-level cache
+        if event_id not in PricingService._pricing_cache:
+            PricingService._pricing_cache[event_id] = []
+        PricingService._pricing_cache[event_id].append(history_entry)
+        # Keep only last 100 entries per event
+        PricingService._pricing_cache[event_id] = PricingService._pricing_cache[event_id][-100:]
         
         return {
             "event_id": event_id,
@@ -463,35 +471,32 @@ class PricingService:
         event_id: str,
         days: int = 30
     ) -> List[Dict[str, Any]]:
-        """Get pricing history for an event."""
+        """Get pricing history for an event from in-memory cache."""
         try:
-            event_uuid = uuid.UUID(event_id)
             since = datetime.utcnow() - timedelta(days=days)
             
-            query = select(PricingHistory).where(
-                and_(
-                    PricingHistory.event_id == event_uuid,
-                    PricingHistory.calculated_at >= since
-                )
-            ).order_by(desc(PricingHistory.calculated_at))
+            # Get from in-memory cache
+            cached_history = PricingService._pricing_cache.get(event_id, [])
             
-            result = await db.execute(query)
-            history = result.scalars().all()
+            # Filter by date
+            filtered = []
+            for h in cached_history:
+                calc_time = datetime.fromisoformat(h["calculated_at"]) if isinstance(h["calculated_at"], str) else h["calculated_at"]
+                if calc_time >= since:
+                    filtered.append({
+                        "calculated_at": h["calculated_at"] if isinstance(h["calculated_at"], str) else h["calculated_at"].isoformat(),
+                        "base_price": h["base_price"],
+                        "suggested_price": h["suggested_price"],
+                        "factors": {
+                            "time": h["time_factor"],
+                            "demand": h["demand_factor"],
+                            "seasonality": h["seasonality_factor"],
+                            "combined": h["final_factor"]
+                        }
+                    })
             
-            return [
-                {
-                    "calculated_at": h.calculated_at.isoformat(),
-                    "base_price": h.base_price,
-                    "suggested_price": h.suggested_price,
-                    "factors": {
-                        "time": h.time_factor,
-                        "demand": h.demand_factor,
-                        "seasonality": h.seasonality_factor,
-                        "combined": h.final_factor
-                    }
-                }
-                for h in history
-            ]
+            # Return sorted by most recent first
+            return sorted(filtered, key=lambda x: x["calculated_at"], reverse=True)
             
         except Exception as e:
             logger.error(f"Get pricing history error: {e}")
