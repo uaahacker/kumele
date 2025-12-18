@@ -513,21 +513,28 @@ class ModerationService:
         """
         Internal method to call HuggingFace Inference API for image classification.
         Model: Falconsai/nsfw_image_detection
+        
+        NOTE: As of late 2024, HuggingFace deprecated api-inference.huggingface.co
+        and now requires using router.huggingface.co instead.
         """
-        # Build headers - API key is required for reliable access
+        # Build headers - API key is REQUIRED for the new router endpoint
         headers = {
             "Content-Type": "application/octet-stream"
         }
         
-        # Add API key if available (required for production use)
+        # Add API key - REQUIRED for router.huggingface.co
         if settings.HUGGINGFACE_API_KEY:
             headers["Authorization"] = f"Bearer {settings.HUGGINGFACE_API_KEY}"
         else:
-            logger.warning("HUGGINGFACE_API_KEY not set - image moderation may fail or be rate-limited")
+            logger.warning("HUGGINGFACE_API_KEY not set - image moderation will fail")
+            return None
+        
+        # New HuggingFace Router endpoint (api-inference.huggingface.co is deprecated/410 Gone)
+        api_url = f"https://router.huggingface.co/hf-inference/models/{settings.IMAGE_MODERATION_MODEL}"
         
         try:
             hf_response = await client.post(
-                f"https://api-inference.huggingface.co/models/{settings.IMAGE_MODERATION_MODEL}",
+                api_url,
                 headers=headers,
                 content=image_bytes,
                 timeout=30.0

@@ -867,24 +867,38 @@ async def check_huggingface_status():
         status["recommendation"] = "Set IMAGE_ANALYSIS_ENABLED=true in your .env file"
         return status
     
-    # Try to check model status
+    # Try to check model status using new HuggingFace Router endpoint
+    # NOTE: api-inference.huggingface.co is deprecated (returns 410 Gone)
     try:
-        api_url = "https://api-inference.huggingface.co/models/Falconsai/nsfw_image_detection"
+        api_url = "https://router.huggingface.co/hf-inference/models/Falconsai/nsfw_image_detection"
         
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Just check the model info endpoint
-            response = await client.get(
+            # Check the model via POST with empty/minimal request
+            response = await client.post(
                 api_url,
-                headers={"Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}"}
+                headers={
+                    "Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}",
+                    "Content-Type": "application/octet-stream"
+                },
+                content=b""  # Empty content to check if API is accessible
             )
             
+            # Note: Empty content may return 400 (bad request) but that means API is reachable
             if response.status_code == 200:
                 status["api_status"] = "ready"
                 status["api_message"] = "Model is loaded and ready"
+            elif response.status_code == 400:
+                # 400 with empty content means API is working, just needs valid image
+                status["api_status"] = "ready"
+                status["api_message"] = "API is accessible (empty test request rejected as expected)"
             elif response.status_code == 401:
                 status["api_status"] = "auth_failed"
                 status["api_message"] = "Invalid API key"
                 status["recommendation"] = "Check your HUGGINGFACE_API_KEY is correct"
+            elif response.status_code == 410:
+                status["api_status"] = "deprecated"
+                status["api_message"] = "API endpoint is deprecated"
+                status["recommendation"] = "Update to router.huggingface.co (contact developer)"
             elif response.status_code == 503:
                 status["api_status"] = "loading"
                 status["api_message"] = "Model is loading, please wait 20-30 seconds"
