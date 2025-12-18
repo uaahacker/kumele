@@ -337,25 +337,29 @@ async def upload_and_moderate_image(
         # Determine decision
         if max_score >= 0.6:
             decision = "reject"
+            is_safe = False
         elif max_score >= 0.3:
             decision = "needs_review"
+            is_safe = False
         else:
             decision = "approve"
+            is_safe = True
         
         return {
-            "success": True,
             "content_id": content_id,
             "filename": file.filename,
             "content_type": file.content_type,
             "size_bytes": len(content),
-            "moderation": {
-                "decision": decision,
-                "confidence": round(1.0 - max_score, 2),
-                "max_score": round(max_score, 2),
+            "is_safe": is_safe,  # TRUE = safe, FALSE = unsafe/rejected
+            "moderation_result": {
+                "decision": decision,  # "approve", "reject", or "needs_review"
+                "nsfw_score": round(max_score, 2),  # 0.0 = safe, 1.0 = explicit
+                "confidence": round(max_score * 100, 1),  # Percentage confidence it's NSFW
                 "labels": labels,
                 "model": moderation_result.get("model", "fallback"),
                 "api_status": moderation_result.get("api_status", "unknown")
             },
+            "message": f"Image {'REJECTED - NSFW content detected' if decision == 'reject' else 'FLAGGED for review' if decision == 'needs_review' else 'APPROVED - Safe content'}",
             "error": moderation_result.get("error")
         }
         
