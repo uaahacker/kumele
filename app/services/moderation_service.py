@@ -66,11 +66,14 @@ logger = logging.getLogger(__name__)
 class ModerationService:
     """Service for unified content moderation."""
     
-    # Text moderation thresholds
+    # Text moderation thresholds (lower = more sensitive)
     TEXT_THRESHOLDS = {
-        "toxicity": settings.TOXICITY_THRESHOLD,
-        "hate": settings.HATE_THRESHOLD,
-        "spam": settings.SPAM_THRESHOLD,
+        "toxicity": settings.TOXICITY_THRESHOLD,      # 0.60
+        "hate": settings.HATE_THRESHOLD,              # 0.30
+        "spam": settings.SPAM_THRESHOLD,              # 0.70
+        "sexual": 0.30,                               # Sexual content threshold
+        "violence": 0.40,                             # Violence threshold for text
+        "profanity": 0.50,                            # Profanity threshold
     }
     
     # Image moderation thresholds
@@ -80,85 +83,246 @@ class ModerationService:
         "hate_symbols": 0.40,
     }
     
-    # Toxic word patterns (basic list for fallback)
-    TOXIC_PATTERNS = [
-        r'\b(hate|kill|die|stupid|idiot|dumb|ugly|fat|loser)\b',
-        r'\b(racist|sexist|homophobic)\b',
-        r'\b(scam|fraud|fake)\b',
+    # =========================================================================
+    # EXPLICIT/SEXUAL CONTENT PATTERNS - High severity (instant flag)
+    # =========================================================================
+    SEXUAL_PATTERNS = [
+        # Explicit sexual acts
+        r'\b(fuck|fucking|fucked|fucker|fucks)\b',
+        r'\b(sex|sexy|sexual|sexually)\b',
+        r'\b(porn|porno|pornography|pornographic)\b',
+        r'\b(nude|naked|nudity|nudes)\b',
+        r'\b(dick|cock|penis|vagina|pussy|cunt|ass|arse|asshole|butthole)\b',
+        r'\b(boobs|tits|breasts|nipples|titties)\b',
+        r'\b(blowjob|handjob|masturbat|orgasm|ejaculat|cum|cumming|cumshot)\b',
+        r'\b(slut|whore|hooker|prostitut|escort)\b',
+        r'\b(rape|raped|raping|rapist)\b',
+        r'\b(incest|pedophil|molest)\b',
+        r'\b(bitch|bitches|bitching)\b',
+        r'\b(horny|erotic|erection|aroused)\b',
+        r'\b(stripper|striptease|lapdance)\b',
+        r'\b(threesome|foursome|gangbang|orgy)\b',
+        r'\b(dildo|vibrator|buttplug|fleshlight)\b',
+        r'\b(anal|oral|69|blowj|handy|rimjob|creampie)\b',
     ]
     
-    # Spam patterns
+    # =========================================================================
+    # HATE SPEECH / DISCRIMINATION PATTERNS - High severity
+    # =========================================================================
+    HATE_PATTERNS = [
+        # Racial slurs (censored but detectable patterns)
+        r'\b(nigger|nigga|negro|coon|spic|chink|gook|kike|wetback)\b',
+        r'\b(cracker|honky|gringo|beaner|towelhead|raghead|camel.?jockey)\b',
+        # Homophobic slurs
+        r'\b(faggot|fag|dyke|homo|queer|tranny|shemale)\b',
+        # Disability slurs
+        r'\b(retard|retarded|spastic|cripple|mongoloid)\b',
+        # Religious hate
+        r'\b(jihad|terrorist|islamophob|antisemit)\b',
+        # General hate
+        r'\b(nazi|fascist|white.?power|heil.?hitler|kkk|skinhead)\b',
+        r'\b(genocide|ethnic.?cleansing|holocaust.?denial)\b',
+        r'\b(subhuman|untermensch|master.?race)\b',
+    ]
+    
+    # =========================================================================
+    # VIOLENCE / THREATS PATTERNS - High severity
+    # =========================================================================
+    VIOLENCE_PATTERNS = [
+        r'\b(kill|killing|killed|killer|murder|murdered|murderer)\b',
+        r'\b(die|dying|death|dead|suicide|suicidal)\b',
+        r'\b(shoot|shooting|shot|gun|firearm|weapon)\b',
+        r'\b(stab|stabbing|knife|machete|sword)\b',
+        r'\b(bomb|bombing|explosive|detonate|terrorist)\b',
+        r'\b(assault|attack|beat|beating|punch|kick)\b',
+        r'\b(torture|torment|mutilate|dismember)\b',
+        r'\b(threat|threaten|threatening|i.?will.?kill)\b',
+        r'\b(blood|bloody|bleed|bleeding|gore|gory)\b',
+        r'\b(harm|hurt|injure|wound|damage)\b',
+        r'\b(strangle|choke|suffocate|drown)\b',
+        r'\b(execute|execution|behead|decapitat)\b',
+    ]
+    
+    # =========================================================================
+    # TOXICITY / INSULTS PATTERNS - Medium severity
+    # =========================================================================
+    TOXIC_PATTERNS = [
+        r'\b(hate|hating|hatred|hater)\b',
+        r'\b(stupid|idiot|moron|dumb|dumbass|imbecile)\b',
+        r'\b(ugly|hideous|disgusting|repulsive)\b',
+        r'\b(loser|pathetic|worthless|useless)\b',
+        r'\b(trash|garbage|scum|filth)\b',
+        r'\b(shut.?up|stfu|gtfo|kys|go.?die)\b',
+        r'\b(fat|fatass|obese|pig|cow)\b',
+        r'\b(bastard|damn|damned|hell)\b',
+        r'\b(piss|pissed|crap|crappy|shit|shitty|bullshit)\b',
+        r'\b(suck|sucks|sucker|sucking)\b',
+        r'\b(jerk|asshole|dickhead|douchebag|scumbag)\b',
+    ]
+    
+    # =========================================================================
+    # SPAM PATTERNS - Lower severity
+    # =========================================================================
     SPAM_PATTERNS = [
         r'(click here|free money|you won|congratulations|act now)',
         r'(buy now|limited time|discount|offer expires)',
-        r'https?://\S+',  # Multiple URLs
-        r'(.)\1{4,}',  # Repeated characters
+        r'(make money fast|work from home|earn \$)',
+        r'(https?://\S+){2,}',  # Multiple URLs
+        r'(.)\1{4,}',  # Repeated characters (aaaaaaa)
+        r'\b[A-Z]{5,}\b',  # ALL CAPS words
+        r'(!{3,}|\?{3,})',  # Excessive punctuation
     ]
 
     @staticmethod
     async def moderate_text(text: str) -> Dict[str, Any]:
         """
-        Moderate text content for toxicity, hate, and spam.
-        Returns labels with scores.
+        Moderate text content for sexual, hate, violence, toxicity, and spam.
+        
+        Scoring System:
+        - Each match in HIGH severity patterns (sexual, hate, violence) = 0.4 score
+        - Each match in MEDIUM severity patterns (toxicity) = 0.25 score  
+        - Each match in LOW severity patterns (spam) = 0.15 score
+        - Single match of severe content is enough to trigger rejection
+        
+        Returns labels with scores for each category detected.
         """
         labels = []
         text_lower = text.lower()
+        matched_terms = []  # Track what was found for debugging
         
         try:
-            # In production, call Hugging Face toxicity model
-            # For now, use pattern-based detection
+            # =================================================================
+            # 1. SEXUAL/EXPLICIT CONTENT - Highest severity (0.4 per match, max 1.0)
+            # =================================================================
+            sexual_score = 0.0
+            sexual_matches = []
+            for pattern in ModerationService.SEXUAL_PATTERNS:
+                matches = re.findall(pattern, text_lower, re.IGNORECASE)
+                if matches:
+                    sexual_matches.extend(matches)
+                    # Each sexual term is severe - high score per match
+                    sexual_score += len(matches) * 0.4
+            sexual_score = min(sexual_score, 1.0)
             
-            # Check for toxic content
+            if sexual_score > 0:
+                labels.append({
+                    "label": "sexual",
+                    "score": round(sexual_score, 2),
+                    "matched": sexual_matches[:5]  # Include what was matched
+                })
+                matched_terms.extend(sexual_matches)
+            
+            # =================================================================
+            # 2. HATE SPEECH - Highest severity (0.5 per match, max 1.0)
+            # =================================================================
+            hate_score = 0.0
+            hate_matches = []
+            for pattern in ModerationService.HATE_PATTERNS:
+                matches = re.findall(pattern, text_lower, re.IGNORECASE)
+                if matches:
+                    hate_matches.extend(matches)
+                    # Hate speech is extremely severe
+                    hate_score += len(matches) * 0.5
+            hate_score = min(hate_score, 1.0)
+            
+            if hate_score > 0:
+                labels.append({
+                    "label": "hate",
+                    "score": round(hate_score, 2),
+                    "matched": hate_matches[:5]
+                })
+                matched_terms.extend(hate_matches)
+            
+            # =================================================================
+            # 3. VIOLENCE/THREATS - High severity (0.35 per match, max 1.0)
+            # =================================================================
+            violence_score = 0.0
+            violence_matches = []
+            for pattern in ModerationService.VIOLENCE_PATTERNS:
+                matches = re.findall(pattern, text_lower, re.IGNORECASE)
+                if matches:
+                    violence_matches.extend(matches)
+                    violence_score += len(matches) * 0.35
+            violence_score = min(violence_score, 1.0)
+            
+            if violence_score > 0:
+                labels.append({
+                    "label": "violence",
+                    "score": round(violence_score, 2),
+                    "matched": violence_matches[:5]
+                })
+                matched_terms.extend(violence_matches)
+            
+            # =================================================================
+            # 4. TOXICITY/INSULTS - Medium severity (0.25 per match, max 1.0)
+            # =================================================================
             toxicity_score = 0.0
+            toxicity_matches = []
             for pattern in ModerationService.TOXIC_PATTERNS:
                 matches = re.findall(pattern, text_lower, re.IGNORECASE)
-                toxicity_score += len(matches) * 0.2
+                if matches:
+                    toxicity_matches.extend(matches)
+                    toxicity_score += len(matches) * 0.25
             toxicity_score = min(toxicity_score, 1.0)
             
             if toxicity_score > 0:
                 labels.append({
                     "label": "toxicity",
-                    "score": round(toxicity_score, 2)
+                    "score": round(toxicity_score, 2),
+                    "matched": toxicity_matches[:5]
                 })
+                matched_terms.extend(toxicity_matches)
             
-            # Check for spam
+            # =================================================================
+            # 5. SPAM - Lower severity (0.15 per match, max 1.0)
+            # =================================================================
             spam_score = 0.0
+            spam_matches = []
             for pattern in ModerationService.SPAM_PATTERNS:
                 matches = re.findall(pattern, text_lower, re.IGNORECASE)
-                spam_score += len(matches) * 0.15
+                if matches:
+                    # Convert match tuples to strings if needed
+                    for m in matches:
+                        spam_matches.append(str(m) if not isinstance(m, str) else m)
+                    spam_score += len(matches) * 0.15
             
-            # Check for excessive caps
-            caps_ratio = sum(1 for c in text if c.isupper()) / max(len(text), 1)
-            if caps_ratio > 0.5:
-                spam_score += 0.2
+            # Check for excessive caps (spam indicator)
+            if len(text) > 10:
+                caps_ratio = sum(1 for c in text if c.isupper()) / len(text)
+                if caps_ratio > 0.6:
+                    spam_score += 0.3
+                    spam_matches.append("EXCESSIVE_CAPS")
             
             spam_score = min(spam_score, 1.0)
             
             if spam_score > 0:
                 labels.append({
                     "label": "spam",
-                    "score": round(spam_score, 2)
+                    "score": round(spam_score, 2),
+                    "matched": spam_matches[:5]
                 })
             
-            # Check for potential hate speech (simplified)
-            hate_words = ['hate', 'racist', 'sexist', 'homophobic', 'nazi']
-            hate_score = sum(0.25 for word in hate_words if word in text_lower)
-            hate_score = min(hate_score, 1.0)
+            # =================================================================
+            # Calculate max score across all categories
+            # =================================================================
+            max_score = max([l["score"] for l in labels]) if labels else 0.0
             
-            if hate_score > 0:
-                labels.append({
-                    "label": "hate",
-                    "score": round(hate_score, 2)
-                })
+            logger.info(f"Text moderation: found {len(matched_terms)} flagged terms, max_score={max_score}")
             
             return {
                 "labels": labels,
-                "max_score": max([l["score"] for l in labels]) if labels else 0.0
+                "max_score": max_score,
+                "total_flags": len(matched_terms)
             }
             
         except Exception as e:
             logger.error(f"Text moderation error: {e}")
-            return {"labels": [], "max_score": 0.0}
+            # On error, be conservative and flag for review
+            return {
+                "labels": [{"label": "error", "score": 0.5}],
+                "max_score": 0.5,
+                "error": str(e)
+            }
 
     @staticmethod
     async def moderate_image(
@@ -335,29 +499,52 @@ class ModerationService:
     ) -> str:
         """
         Make moderation decision based on labels and thresholds.
+        
+        Decision Logic:
+        - Any high-severity category (sexual, hate) above threshold → REJECT
+        - Any medium-severity category near threshold → NEEDS_REVIEW  
+        - All scores below thresholds → APPROVE
+        
         Returns: 'approve', 'reject', or 'needs_review'
         """
         if not labels:
             return "approve"
         
-        # Get appropriate thresholds
-        if content_type == "text":
-            thresholds = ModerationService.TEXT_THRESHOLDS
-        else:  # image or video
-            thresholds = ModerationService.IMAGE_THRESHOLDS
+        # Combined thresholds for all categories
+        all_thresholds = {
+            # High severity - immediate rejection
+            "sexual": 0.30,       # Very low threshold for sexual content
+            "hate": 0.30,         # Very low threshold for hate speech
+            "violence": 0.40,     # Low threshold for violence
+            # Medium severity
+            "toxicity": 0.60,     # Medium threshold for general toxicity
+            "profanity": 0.50,    # Medium threshold for profanity
+            "spam": 0.70,         # Higher threshold for spam
+            # Image categories
+            "nudity": 0.60,
+            "hate_symbols": 0.40,
+        }
         
-        # Check each label against thresholds
+        # Track decision factors
         needs_review = False
+        rejection_reasons = []
         
         for label in labels:
             label_name = label["label"]
             score = label["score"]
             
-            threshold = thresholds.get(label_name, 0.5)
+            threshold = all_thresholds.get(label_name, 0.5)
+            
+            # High severity categories get instant rejection at lower scores
+            high_severity = label_name in ["sexual", "hate", "violence", "nudity"]
             
             if score >= threshold:
-                # Above threshold = reject
+                # Above threshold = definite rejection
+                rejection_reasons.append(f"{label_name}:{score}")
                 return "reject"
+            elif high_severity and score >= threshold * 0.5:
+                # High severity content even at 50% of threshold should be reviewed
+                needs_review = True
             elif score >= threshold * 0.7:
                 # Close to threshold = needs review
                 needs_review = True
@@ -429,22 +616,41 @@ class ModerationService:
             labels = result["labels"]
         
         # Convert labels to flags format expected by response
+        # Include matched terms for transparency
         for label in labels:
             threshold = ModerationService.TEXT_THRESHOLDS.get(
                 label["label"], 
                 ModerationService.IMAGE_THRESHOLDS.get(label["label"], 0.5)
             )
-            flags.append({
+            flag_info = {
                 "flag_type": label["label"],
                 "score": label["score"],
-                "threshold": threshold
-            })
+                "threshold": threshold,
+                "exceeds_threshold": label["score"] >= threshold
+            }
+            # Include matched terms if available (helps debugging)
+            if "matched" in label:
+                flag_info["matched_terms"] = label["matched"]
+            flags.append(flag_info)
+            
             if label["score"] >= threshold:
-                reasons.append(f"{label['label']} detected (score: {label['score']:.2f})")
+                matched_info = ""
+                if "matched" in label and label["matched"]:
+                    matched_info = f" (matched: {', '.join(str(m) for m in label['matched'][:3])})"
+                reasons.append(f"{label['label']} detected (score: {label['score']:.2f}, threshold: {threshold}){matched_info}")
+            elif label["score"] >= threshold * 0.7:
+                reasons.append(f"{label['label']} near threshold (score: {label['score']:.2f}, threshold: {threshold})")
         
         # Make decision
         decision = ModerationService.make_decision(content_type_value, labels)
-        confidence = 1.0 - (result.get("max_score", 0) if labels else 0)
+        
+        # Confidence: lower when more flags or higher scores
+        max_score = result.get("max_score", 0) if labels else 0
+        confidence = max(0.0, 1.0 - max_score)
+        
+        # Log the moderation result
+        logger.info(f"Moderation result: content_id={content_id}, decision={decision}, "
+                   f"max_score={max_score}, flags={len(flags)}")
         
         # Store in database
         job = await ModerationService.store_moderation_job(
@@ -458,7 +664,8 @@ class ModerationService:
             "confidence": round(confidence, 2),
             "flags": flags,
             "reasons": reasons,
-            "job_id": job.content_id if job else None
+            "job_id": job.content_id if job else content_id,
+            "max_score": round(max_score, 2)
         }
 
     @staticmethod

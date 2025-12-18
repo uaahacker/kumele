@@ -327,6 +327,54 @@ async def upload_image_for_testing(
 
 
 @router.post(
+    "/test-image-moderation",
+    summary="Quick Test Image Moderation",
+    description="""
+    Test image moderation using a public image URL.
+    
+    The image will be analyzed for:
+    - **NSFW/Nudity**: Sexual or explicit content
+    - **Violence**: Gore, blood, disturbing content  
+    - **Hate Symbols**: Offensive symbols or imagery
+    
+    **Example URLs to test:**
+    - Safe image: `https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/300px-PNG_transparency_demonstration_1.png`
+    
+    **Note**: The system uses HuggingFace's NSFW detection model when available.
+    """
+)
+async def quick_test_image_moderation(
+    image_url: str = Form(..., description="Public URL of image to moderate"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Quick test for image moderation."""
+    from app.services.moderation_service import ModerationService
+    
+    content_id = str(uuid.uuid4())
+    
+    try:
+        result = await ModerationService.moderate_content(
+            db=db,
+            content_id=content_id,
+            content_type="image",
+            text=None,
+            image_url=image_url,
+            video_url=None,
+            user_id=None
+        )
+        
+        return {
+            "input_url": image_url,
+            "content_id": content_id,
+            "result": result
+        }
+        
+    except Exception as e:
+        logger.error(f"Quick image moderation test error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
     "/test-text-moderation",
     summary="Quick Test Text Moderation",
     description="""
