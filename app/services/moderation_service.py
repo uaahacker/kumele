@@ -341,52 +341,140 @@ class ModerationService:
             if settings.IMAGE_ANALYSIS_ENABLED:
                 hf_result = await ModerationService.analyze_image_with_huggingface(url_to_check)
                 if hf_result and hf_result.get("labels"):
-                    return hf_result
+                    # Check if there was an API error
+                    if hf_result.get("api_status") in ["auth_failed", "model_loading", "timeout"]:
+                        logger.warning(f"HuggingFace API issue: {hf_result.get('error')}")
+                        # Fall through to URL heuristics
+                    else:
+                        return hf_result
             
-            # Fallback: URL-based heuristics
+            # Fallback: URL-based heuristics (when API not available)
+            logger.info("Using URL-based heuristics for image moderation (HuggingFace API not available)")
             url_lower = url_to_check.lower()
             
             # Basic URL-based heuristics
-            suspicious_terms = ['nsfw', 'adult', 'xxx', 'porn', 'nude']
+            suspicious_terms = ['nsfw', 'adult', 'xxx', 'porn', 'nude', 'sexy', 'hot', 'naked']
             for term in suspicious_terms:
                 if term in url_lower:
                     labels.append({
                         "label": "nudity",
-                        "score": 0.7
+                        "score": 0.7,
+                        "method": "url_heuristic"
                     })
                     break
             
-            violence_terms = ['gore', 'blood', 'violence', 'death']
+            violence_terms = ['gore', 'blood', 'violence', 'death', 'kill', 'murder', 'graphic']
             for term in violence_terms:
                 if term in url_lower:
                     labels.append({
                         "label": "violence",
-                        "score": 0.6
+                        "score": 0.6,
+                        "method": "url_heuristic"
                     })
                     break
             
             # Default safe scores if no suspicious patterns
             if not labels:
                 labels = [
-                    {"label": "nudity", "score": 0.05},
-                    {"label": "violence", "score": 0.03},
-                    {"label": "hate_symbols", "score": 0.02}
+                    {"label": "nudity", "score": 0.05, "method": "url_heuristic"},
+                    {"label": "violence", "score": 0.03, "method": "url_heuristic"},
+                    {"label": "hate_symbols", "score": 0.02, "method": "url_heuristic"}
                 ]
             
             return {
                 "labels": labels,
-                "max_score": max([l["score"] for l in labels]) if labels else 0.0
+                "max_score": max([l["score"] for l in labels]) if labels else 0.0,
+                "note": "Used URL heuristics - set HUGGINGFACE_API_KEY for AI-powered analysis"
             }
             
         except Exception as e:
             logger.error(f"Image moderation error: {e}")
-            return {"labels": [], "max_score": 0.0}
+            return {"labels": [], "max_score": 0.0, "error": str(e)}
+
+    @staticmethod
+    async def moderate_image_bytes(
+        image_bytes: bytes,
+        filename: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Moderate uploaded image bytes directly using HuggingFace AI.
+        Use this for file uploads instead of URLs.
+        
+        Args:
+            image_bytes: Raw image file bytes
+            filename: Optional filename for logging
+            
+        Returns:
+            Moderation result with labels and scores
+        """
+        try:
+            if not image_bytes:
+                return {
+                    "labels": [],
+                    "max_score": 0.0,
+                    "error": "No image data provided"
+                }
+            
+            logger.info(f"Moderating uploaded image: {filename or 'unknown'}, size={len(image_bytes)} bytes")
+            
+            # Try HuggingFace image analysis
+            if settings.IMAGE_ANALYSIS_ENABLED:
+                hf_result = await ModerationService.analyze_image_bytes_with_huggingface(image_bytes)
+                if hf_result:
+                    return hf_result
+            
+            # Fallback: Cannot do URL heuristics for uploaded images
+            # Return a "needs review" status since we can't analyze it
+            logger.warning("Cannot analyze uploaded image - HUGGINGFACE_API_KEY not set or API unavailable")
+            return {
+                "labels": [
+                    {"label": "unanalyzed", "score": 0.5, "method": "fallback"}
+                ],
+                "max_score": 0.5,
+                "error": "Image analysis unavailable - set HUGGINGFACE_API_KEY for AI moderation",
+                "recommendation": "needs_review"
+            }
+            
+        except Exception as e:
+            logger.error(f"Image bytes moderation error: {e}")
+            return {"labels": [], "max_score": 0.0, "error": str(e)}
+
+    @staticmethod
+    async def moderate_base64_image(
+        base64_data: str,
+        filename: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Moderate base64 encoded image using HuggingFace AI.
+        
+        Args:
+            base64_data: Base64 encoded image string (with or without data URI prefix)
+            filename: Optional filename for logging
+            
+        Returns:
+            Moderation result with labels and scores
+        """
+        import base64 as b64
+        
+        try:
+            # Remove data URI prefix if present (e.g., "data:image/jpeg;base64,")
+            if "," in base64_data:
+                base64_data = base64_data.split(",", 1)[1]
+            
+            # Decode base64 to bytes
+            image_bytes = b64.b64decode(base64_data)
+            
+            return await ModerationService.moderate_image_bytes(image_bytes, filename)
+            
+        except Exception as e:
+            logger.error(f"Base64 image moderation error: {e}")
+            return {"labels": [], "max_score": 0.0, "error": f"Invalid base64 data: {e}"}
 
     @staticmethod
     async def analyze_image_with_huggingface(image_url: str) -> Optional[Dict[str, Any]]:
         """
         Analyze image using HuggingFace NSFW detection model.
-        Your friend's request: "if we give picture to it, it should do work"
+        Supports both URL and base64 encoded images.
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -398,56 +486,122 @@ class ModerationService:
                 
                 image_bytes = img_response.content
                 
-                # Call HuggingFace Inference API for NSFW detection
-                # Model: Falconsai/nsfw_image_detection
-                hf_response = await client.post(
-                    f"https://api-inference.huggingface.co/models/{settings.IMAGE_MODERATION_MODEL}",
-                    headers={
-                        "Content-Type": "application/octet-stream"
-                    },
-                    content=image_bytes,
-                    timeout=30.0
-                )
-                
-                if hf_response.status_code == 200:
-                    results = hf_response.json()
-                    labels = []
-                    
-                    # Parse HuggingFace response
-                    # Format: [{"label": "nsfw", "score": 0.95}, {"label": "normal", "score": 0.05}]
-                    for result in results:
-                        label_name = result.get("label", "").lower()
-                        score = result.get("score", 0.0)
-                        
-                        # Map HuggingFace labels to our labels
-                        if label_name in ["nsfw", "sexy", "porn", "hentai"]:
-                            labels.append({"label": "nudity", "score": round(score, 2)})
-                        elif label_name in ["gore", "violence", "disturbing"]:
-                            labels.append({"label": "violence", "score": round(score, 2)})
-                        elif label_name == "normal" and score > 0.9:
-                            # High confidence safe image
-                            labels = [
-                                {"label": "nudity", "score": round(1 - score, 2)},
-                                {"label": "violence", "score": 0.02},
-                                {"label": "hate_symbols", "score": 0.01}
-                            ]
-                    
-                    if labels:
-                        return {
-                            "labels": labels,
-                            "max_score": max([l["score"] for l in labels]),
-                            "model": settings.IMAGE_MODERATION_MODEL
-                        }
-                elif hf_response.status_code == 503:
-                    # Model is loading
-                    logger.info("HuggingFace model is loading, using fallback")
-                else:
-                    logger.warning(f"HuggingFace API error: {hf_response.status_code}")
+                return await ModerationService._call_huggingface_image_api(client, image_bytes)
                     
         except httpx.TimeoutException:
             logger.warning("HuggingFace image analysis timeout")
         except Exception as e:
             logger.warning(f"HuggingFace image analysis error: {e}")
+        
+        return None
+
+    @staticmethod
+    async def analyze_image_bytes_with_huggingface(image_bytes: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Analyze image bytes directly using HuggingFace NSFW detection model.
+        Use this for uploaded files or base64 decoded images.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                return await ModerationService._call_huggingface_image_api(client, image_bytes)
+        except Exception as e:
+            logger.warning(f"HuggingFace image analysis error: {e}")
+        return None
+
+    @staticmethod
+    async def _call_huggingface_image_api(client: httpx.AsyncClient, image_bytes: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Internal method to call HuggingFace Inference API for image classification.
+        Model: Falconsai/nsfw_image_detection
+        """
+        # Build headers - API key is required for reliable access
+        headers = {
+            "Content-Type": "application/octet-stream"
+        }
+        
+        # Add API key if available (required for production use)
+        if settings.HUGGINGFACE_API_KEY:
+            headers["Authorization"] = f"Bearer {settings.HUGGINGFACE_API_KEY}"
+        else:
+            logger.warning("HUGGINGFACE_API_KEY not set - image moderation may fail or be rate-limited")
+        
+        try:
+            hf_response = await client.post(
+                f"https://api-inference.huggingface.co/models/{settings.IMAGE_MODERATION_MODEL}",
+                headers=headers,
+                content=image_bytes,
+                timeout=30.0
+            )
+            
+            logger.info(f"HuggingFace API response status: {hf_response.status_code}")
+            
+            if hf_response.status_code == 200:
+                results = hf_response.json()
+                labels = []
+                
+                logger.info(f"HuggingFace raw results: {results}")
+                
+                # Parse HuggingFace response
+                # Format: [{"label": "nsfw", "score": 0.95}, {"label": "normal", "score": 0.05}]
+                for result in results:
+                    label_name = result.get("label", "").lower()
+                    score = result.get("score", 0.0)
+                    
+                    # Map HuggingFace labels to our labels
+                    if label_name in ["nsfw", "sexy", "porn", "hentai"]:
+                        labels.append({"label": "nudity", "score": round(score, 2)})
+                    elif label_name in ["gore", "violence", "disturbing"]:
+                        labels.append({"label": "violence", "score": round(score, 2)})
+                    elif label_name == "normal":
+                        # Normal/safe image - score represents how safe it is
+                        # So nudity score = 1 - normal_score
+                        nudity_score = round(1 - score, 2)
+                        labels.append({"label": "nudity", "score": nudity_score})
+                        labels.append({"label": "violence", "score": 0.02})
+                        labels.append({"label": "hate_symbols", "score": 0.01})
+                
+                if labels:
+                    max_score = max([l["score"] for l in labels])
+                    return {
+                        "labels": labels,
+                        "max_score": max_score,
+                        "model": settings.IMAGE_MODERATION_MODEL,
+                        "api_status": "success"
+                    }
+                    
+            elif hf_response.status_code == 401:
+                logger.error("HuggingFace API: Unauthorized - check HUGGINGFACE_API_KEY")
+                return {
+                    "labels": [{"label": "error", "score": 0.5}],
+                    "max_score": 0.5,
+                    "error": "API authentication failed - set HUGGINGFACE_API_KEY",
+                    "api_status": "auth_failed"
+                }
+            elif hf_response.status_code == 503:
+                # Model is loading - try to parse estimated time
+                try:
+                    error_data = hf_response.json()
+                    estimated_time = error_data.get("estimated_time", 20)
+                    logger.info(f"HuggingFace model is loading, estimated time: {estimated_time}s")
+                except:
+                    pass
+                return {
+                    "labels": [{"label": "pending", "score": 0.5}],
+                    "max_score": 0.5,
+                    "error": "Model is loading, please retry in a few seconds",
+                    "api_status": "model_loading"
+                }
+            else:
+                logger.warning(f"HuggingFace API error: {hf_response.status_code} - {hf_response.text}")
+                
+        except httpx.TimeoutException:
+            logger.warning("HuggingFace API timeout")
+            return {
+                "labels": [{"label": "timeout", "score": 0.5}],
+                "max_score": 0.5,
+                "error": "API timeout",
+                "api_status": "timeout"
+            }
         
         return None
 

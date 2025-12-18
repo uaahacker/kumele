@@ -234,3 +234,169 @@ async def get_moderation_stats(
     except Exception as e:
         logger.error(f"Get moderation stats error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==============================================================================
+# FILE UPLOAD MODERATION ENDPOINTS
+# ==============================================================================
+
+from fastapi import UploadFile, File
+
+
+@router.post(
+    "/upload-image",
+    summary="Moderate Uploaded Image",
+    description="""
+    Moderate an uploaded image file directly.
+    
+    **Supported formats:** JPEG, PNG, GIF, WebP, BMP
+    
+    **Max file size:** 10MB
+    
+    **AI Analysis (when HUGGINGFACE_API_KEY is set):**
+    - NSFW content detection
+    - Sexual/explicit content
+    - Violence detection
+    
+    **Decision thresholds:**
+    - nudity > 0.60 → Reject
+    - sexual > 0.30 → Reject
+    - violence > 0.40 → Flag for review
+    
+    This endpoint processes the image immediately and returns results.
+    """
+)
+async def moderate_uploaded_image(
+    file: UploadFile = File(..., description="Image file to moderate"),
+    user_id: Optional[str] = Query(None, description="User ID for tracking"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Moderate an uploaded image file."""
+    import uuid
+    
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type: {file.content_type}. Allowed: {allowed_types}"
+        )
+    
+    # Read file content
+    content = await file.read()
+    
+    # Check file size (10MB limit)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="File too large. Maximum size is 10MB."
+        )
+    
+    content_id = str(uuid.uuid4())
+    
+    try:
+        # Use the image bytes moderation method
+        moderation_result = await ModerationService.moderate_image_bytes(
+            image_bytes=content,
+            filename=file.filename
+        )
+        
+        # Determine decision based on scores
+        max_score = moderation_result.get("max_score", 0)
+        
+        if max_score >= 0.6:
+            decision = "reject"
+        elif max_score >= 0.3:
+            decision = "needs_review"
+        else:
+            decision = "approve"
+        
+        result = {
+            "content_id": content_id,
+            "content_type": "image",
+            "filename": file.filename,
+            "file_size": len(content),
+            "decision": decision,
+            "confidence": round(1.0 - max_score, 2),
+            "moderation_details": {
+                "max_score": round(max_score, 2),
+                "labels": moderation_result.get("labels", []),
+                "model": moderation_result.get("model", "unknown"),
+                "api_status": moderation_result.get("api_status", "unknown")
+            },
+            "user_id": user_id,
+            "error": moderation_result.get("error")
+        }
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Image upload moderation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/moderate-base64",
+    summary="Moderate Base64 Image",
+    description="""
+    Moderate an image provided as base64 encoded string.
+    
+    **Use cases:**
+    - Canvas/drawing applications
+    - Clipboard images
+    - Client-side image processing
+    
+    **Format:**
+    - With data URI: `data:image/jpeg;base64,/9j/4AAQ...`
+    - Without prefix: `/9j/4AAQ...`
+    
+    **AI Analysis:** Same as upload-image endpoint.
+    """
+)
+async def moderate_base64_image(
+    base64_data: str = Query(..., description="Base64 encoded image data"),
+    user_id: Optional[str] = Query(None, description="User ID for tracking"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Moderate a base64 encoded image."""
+    import uuid
+    
+    content_id = str(uuid.uuid4())
+    
+    try:
+        # Use the base64 moderation method
+        moderation_result = await ModerationService.moderate_base64_image(
+            base64_data=base64_data,
+            filename="base64_image"
+        )
+        
+        # Determine decision based on scores
+        max_score = moderation_result.get("max_score", 0)
+        
+        if max_score >= 0.6:
+            decision = "reject"
+        elif max_score >= 0.3:
+            decision = "needs_review"
+        else:
+            decision = "approve"
+        
+        result = {
+            "content_id": content_id,
+            "content_type": "image",
+            "decision": decision,
+            "confidence": round(1.0 - max_score, 2),
+            "moderation_details": {
+                "max_score": round(max_score, 2),
+                "labels": moderation_result.get("labels", []),
+                "model": moderation_result.get("model", "unknown"),
+                "api_status": moderation_result.get("api_status", "unknown")
+            },
+            "user_id": user_id,
+            "error": moderation_result.get("error")
+        }
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Base64 image moderation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

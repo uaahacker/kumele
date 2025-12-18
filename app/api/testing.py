@@ -278,23 +278,109 @@ async def generate_test_ad():
 # ============================================
 
 @router.post(
+    "/upload-image-moderation",
+    summary="Upload & Moderate Image (AI-Powered)",
+    description="""
+    Upload an image file and get **instant AI moderation results**.
+    
+    Uses HuggingFace NSFW detection model to analyze:
+    - **NSFW/Nudity**: Sexual or explicit content
+    - **Violence**: Gore, blood, disturbing content
+    - **Hate Symbols**: Offensive imagery
+    
+    **Requirements:**
+    - HUGGINGFACE_API_KEY must be set in environment
+    - Supported formats: JPEG, PNG, GIF, WebP
+    - Max file size: 5MB
+    
+    **Decision thresholds:**
+    - score < 0.3: APPROVE (safe)
+    - score 0.3-0.6: NEEDS_REVIEW
+    - score > 0.6: REJECT (unsafe)
+    """
+)
+async def upload_and_moderate_image(
+    file: UploadFile = File(..., description="Image file to moderate (JPG, PNG, GIF, WebP)"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload an image and get AI moderation results."""
+    from app.services.moderation_service import ModerationService
+    
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not allowed. Allowed: {allowed_types}"
+        )
+    
+    # Read file content
+    content = await file.read()
+    
+    # Check file size (max 5MB)
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Max 5MB.")
+    
+    content_id = str(uuid.uuid4())
+    
+    try:
+        # Moderate the image bytes directly
+        moderation_result = await ModerationService.moderate_image_bytes(
+            image_bytes=content,
+            filename=file.filename
+        )
+        
+        # Make decision based on scores
+        labels = moderation_result.get("labels", [])
+        max_score = moderation_result.get("max_score", 0)
+        
+        # Determine decision
+        if max_score >= 0.6:
+            decision = "reject"
+        elif max_score >= 0.3:
+            decision = "needs_review"
+        else:
+            decision = "approve"
+        
+        return {
+            "success": True,
+            "content_id": content_id,
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size_bytes": len(content),
+            "moderation": {
+                "decision": decision,
+                "confidence": round(1.0 - max_score, 2),
+                "max_score": round(max_score, 2),
+                "labels": labels,
+                "model": moderation_result.get("model", "fallback"),
+                "api_status": moderation_result.get("api_status", "unknown")
+            },
+            "error": moderation_result.get("error")
+        }
+        
+    except Exception as e:
+        logger.error(f"Image upload moderation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
     "/upload-image",
-    summary="Upload Image for Testing",
+    summary="Upload Image (No Moderation)",
     description="""
     Upload an image file and get a base64 encoded version.
     
-    **Use this for testing image moderation when you don't have a public URL.**
+    **This does NOT moderate the image** - use `/upload-image-moderation` for that.
     
     The response includes:
     - Base64 encoded image data
     - A content_id you can use
-    - Instructions for using with moderation API
     """
 )
 async def upload_image_for_testing(
     file: UploadFile = File(..., description="Image file to upload (JPG, PNG)")
 ):
-    """Upload an image for testing."""
+    """Upload an image for testing (no moderation)."""
     # Validate file type
     allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
     if file.content_type not in allowed_types:
@@ -321,14 +407,13 @@ async def upload_image_for_testing(
         "content_type": file.content_type,
         "size_bytes": len(content),
         "base64_preview": base64_content[:100] + "..." if len(base64_content) > 100 else base64_content,
-        "note": "To test image moderation, use a public image URL instead, or host this image somewhere and use that URL.",
-        "moderation_tip": "The moderation API requires a public URL. Upload your image to any image hosting service and use that URL."
+        "tip": "Use POST /testing/upload-image-moderation for AI-powered image moderation"
     }
 
 
 @router.post(
     "/test-image-moderation",
-    summary="Quick Test Image Moderation",
+    summary="Test Image Moderation by URL",
     description="""
     Test image moderation using a public image URL.
     
@@ -336,6 +421,10 @@ async def upload_image_for_testing(
     - **NSFW/Nudity**: Sexual or explicit content
     - **Violence**: Gore, blood, disturbing content  
     - **Hate Symbols**: Offensive symbols or imagery
+    
+    **Requirements:**
+    - HUGGINGFACE_API_KEY must be set for AI analysis
+    - Image must be publicly accessible URL
     
     **Example URLs to test:**
     - Safe image: `https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/300px-PNG_transparency_demonstration_1.png`
@@ -347,7 +436,7 @@ async def quick_test_image_moderation(
     image_url: str = Form(..., description="Public URL of image to moderate"),
     db: AsyncSession = Depends(get_db)
 ):
-    """Quick test for image moderation."""
+    """Quick test for image moderation by URL."""
     from app.services.moderation_service import ModerationService
     
     content_id = str(uuid.uuid4())
@@ -375,12 +464,87 @@ async def quick_test_image_moderation(
 
 
 @router.post(
+    "/test-base64-image-moderation",
+    summary="Test Base64 Image Moderation",
+    description="""
+    Moderate an image provided as base64 encoded string.
+    
+    **Use this when you have base64 image data** (e.g., from canvas, clipboard, etc.)
+    
+    **Format:**
+    - Can include data URI prefix: `data:image/jpeg;base64,/9j/4AAQ...`
+    - Or just the base64 string: `/9j/4AAQ...`
+    
+    **Requirements:**
+    - HUGGINGFACE_API_KEY must be set for AI analysis
+    """
+)
+async def test_base64_image_moderation(
+    base64_image: str = Form(..., description="Base64 encoded image data"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Test image moderation with base64 encoded image."""
+    from app.services.moderation_service import ModerationService
+    
+    content_id = str(uuid.uuid4())
+    
+    try:
+        # Moderate the base64 image
+        moderation_result = await ModerationService.moderate_base64_image(
+            base64_data=base64_image,
+            filename="base64_upload"
+        )
+        
+        # Make decision based on scores
+        labels = moderation_result.get("labels", [])
+        max_score = moderation_result.get("max_score", 0)
+        
+        # Determine decision
+        if max_score >= 0.6:
+            decision = "reject"
+        elif max_score >= 0.3:
+            decision = "needs_review"
+        else:
+            decision = "approve"
+        
+        return {
+            "content_id": content_id,
+            "moderation": {
+                "decision": decision,
+                "confidence": round(1.0 - max_score, 2),
+                "max_score": round(max_score, 2),
+                "labels": labels,
+                "model": moderation_result.get("model", "fallback"),
+                "api_status": moderation_result.get("api_status", "unknown")
+            },
+            "error": moderation_result.get("error")
+        }
+        
+    except Exception as e:
+        logger.error(f"Base64 image moderation test error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
     "/test-text-moderation",
     summary="Quick Test Text Moderation",
     description="""
     Quickly test text moderation without needing to construct the full request.
     
     Just provide the text you want to moderate!
+    
+    **Categories detected:**
+    - **Sexual**: Explicit sexual content, profanity
+    - **Hate**: Hate speech, slurs, discrimination
+    - **Violence**: Threats, violent content
+    - **Toxicity**: Insults, harassment
+    - **Spam**: Promotional content, excessive caps
+    
+    **Decision thresholds:**
+    - Sexual/Hate: 0.30 (very sensitive)
+    - Violence: 0.40
+    - Toxicity: 0.60
+    - Spam: 0.70
     """
 )
 async def quick_test_moderation(
@@ -654,3 +818,88 @@ async def get_sample_api_calls():
             }
         }
     }
+
+
+# ==============================================================================
+# HUGGINGFACE API STATUS CHECK
+# ==============================================================================
+
+@router.get(
+    "/huggingface-status",
+    summary="Check HuggingFace API Status",
+    description="""
+    Check if HuggingFace API is properly configured and accessible.
+    
+    **This helps diagnose image moderation issues:**
+    - Is HUGGINGFACE_API_KEY set?
+    - Is the API accessible?
+    - Is the model loaded?
+    
+    **Common issues:**
+    - Missing API key → Set HUGGINGFACE_API_KEY in .env
+    - Model loading → Wait 20-30 seconds and retry
+    - Rate limited → Wait or upgrade HuggingFace plan
+    """
+)
+async def check_huggingface_status():
+    """Check HuggingFace API configuration and status."""
+    import httpx
+    from app.config import settings
+    
+    status = {
+        "api_key_configured": bool(settings.HUGGINGFACE_API_KEY),
+        "image_analysis_enabled": settings.IMAGE_ANALYSIS_ENABLED,
+        "model": "Falconsai/nsfw_image_detection",
+        "api_status": "unknown",
+        "api_message": None,
+        "recommendation": None
+    }
+    
+    if not settings.HUGGINGFACE_API_KEY:
+        status["api_status"] = "not_configured"
+        status["api_message"] = "HUGGINGFACE_API_KEY not set"
+        status["recommendation"] = "Add HUGGINGFACE_API_KEY to your .env file. Get a free key at https://huggingface.co/settings/tokens"
+        return status
+    
+    if not settings.IMAGE_ANALYSIS_ENABLED:
+        status["api_status"] = "disabled"
+        status["api_message"] = "IMAGE_ANALYSIS_ENABLED is False"
+        status["recommendation"] = "Set IMAGE_ANALYSIS_ENABLED=true in your .env file"
+        return status
+    
+    # Try to check model status
+    try:
+        api_url = "https://api-inference.huggingface.co/models/Falconsai/nsfw_image_detection"
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Just check the model info endpoint
+            response = await client.get(
+                api_url,
+                headers={"Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}"}
+            )
+            
+            if response.status_code == 200:
+                status["api_status"] = "ready"
+                status["api_message"] = "Model is loaded and ready"
+            elif response.status_code == 401:
+                status["api_status"] = "auth_failed"
+                status["api_message"] = "Invalid API key"
+                status["recommendation"] = "Check your HUGGINGFACE_API_KEY is correct"
+            elif response.status_code == 503:
+                status["api_status"] = "loading"
+                status["api_message"] = "Model is loading, please wait 20-30 seconds"
+                status["recommendation"] = "Retry in 30 seconds, model needs to cold-start"
+            else:
+                status["api_status"] = f"error_{response.status_code}"
+                status["api_message"] = response.text[:200]
+                
+    except httpx.TimeoutException:
+        status["api_status"] = "timeout"
+        status["api_message"] = "Request timed out"
+        status["recommendation"] = "Network issue or HuggingFace is slow, retry"
+    except Exception as e:
+        status["api_status"] = "error"
+        status["api_message"] = str(e)
+    
+    return status
+

@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     # ==========================================================================
     # ML Models (HuggingFace)
     # ==========================================================================
+    HUGGINGFACE_API_KEY: Optional[str] = None  # Required for image moderation API
     SENTIMENT_MODEL: str  # e.g., distilbert-base-uncased-finetuned-sst-2-english
     EMBEDDING_MODEL: str  # e.g., sentence-transformers/all-MiniLM-L6-v2
     MODERATION_MODEL: str  # e.g., unitary/toxic-bert
