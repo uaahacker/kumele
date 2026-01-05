@@ -19,7 +19,17 @@ docker-compose logs -f worker
 # Access Swagger UI
 # http://YOUR_IP:8000/docs
 ```
+# Stop all containers first
+docker compose down
 
+# Clear the corrupted build cache
+docker builder prune -af
+
+# Optionally, also clear unused images
+docker system prune -f
+
+# Rebuild from scratch
+docker compose up -d --build
 ---
 
 ## 📋 Complete Deployment Steps

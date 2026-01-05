@@ -403,7 +403,7 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {attendance_count} attendance records loaded")
             
-            # 6. Generate event ratings
+            # 6. Generate event ratings (uses dimension-based ratings)
             print("Loading event ratings...")
             rating_count = 0
             for event_id in event_ids[:int(len(event_ids) * 0.7)]:  # 70% of events have ratings
@@ -411,14 +411,20 @@ async def load_data(args):
                 raters = random.sample(user_ids, min(num_ratings, len(user_ids)))
                 for user_id in raters:
                     await session.execute(text("""
-                        INSERT INTO event_ratings (event_id, user_id, rating, review_text, created_at)
-                        VALUES (:event_id, :user_id, :rating, :review, :created_at)
+                        INSERT INTO event_ratings (event_id, user_id, communication, respect, 
+                                                   professionalism, atmosphere, value_for_money, comment, created_at)
+                        VALUES (:event_id, :user_id, :communication, :respect, 
+                                :professionalism, :atmosphere, :value_for_money, :comment, :created_at)
                         ON CONFLICT ON CONSTRAINT uq_event_user_rating DO NOTHING
                     """), {
                         "event_id": event_id,
                         "user_id": user_id,
-                        "rating": random.randint(3, 5),
-                        "review": random.choice([
+                        "communication": round(random.uniform(3.0, 5.0), 1),
+                        "respect": round(random.uniform(3.0, 5.0), 1),
+                        "professionalism": round(random.uniform(3.0, 5.0), 1),
+                        "atmosphere": round(random.uniform(3.0, 5.0), 1),
+                        "value_for_money": round(random.uniform(3.0, 5.0), 1) if random.random() > 0.3 else None,
+                        "comment": random.choice([
                             "Great event!", "Had a wonderful time.", "Would recommend!",
                             "Amazing experience.", "Well organized.", "Loved it!",
                             "Good event, will come again.", "Nice atmosphere.",
@@ -475,48 +481,45 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {interaction_count} blog interactions loaded")
             
-            # 9. Generate ads
+            # 9. Generate ads (uses owner_id, target_hobby)
             print("Loading ads...")
             ad_ids = []
+            hobbies_for_ads = [h[0] for h in HOBBIES]  # Use hobby slugs
             for i in range(1, 51):
                 await session.execute(text("""
-                    INSERT INTO ads (ad_id, advertiser_id, title, description, target_audience, 
-                                     budget, spent, status, ctr, created_at)
-                    VALUES (:ad_id, :advertiser_id, :title, :description, :target, 
-                            :budget, :spent, :status, :ctr, :created_at)
+                    INSERT INTO ads (ad_id, owner_id, title, description, target_hobby, 
+                                     budget, status, created_at)
+                    VALUES (:ad_id, :owner_id, :title, :description, :target_hobby, 
+                            :budget, :status, :created_at)
                     ON CONFLICT (ad_id) DO NOTHING
                 """), {
                     "ad_id": i,
-                    "advertiser_id": random.choice(user_ids[:20]),
+                    "owner_id": random.choice(user_ids[:20]),
                     "title": f"Amazing Product #{i}",
                     "description": f"Check out our amazing offer!",
-                    "target": random.choice(["young_adults", "professionals", "fitness", "tech_savvy", "all"]),
+                    "target_hobby": random.choice(hobbies_for_ads),
                     "budget": round(random.uniform(100, 5000), 2),
-                    "spent": round(random.uniform(0, 1000), 2),
                     "status": random.choice(["active", "active", "active", "paused", "completed"]),
-                    "ctr": round(random.uniform(0.01, 0.15), 4),
                     "created_at": now - timedelta(days=random.randint(1, 90)),
                 })
                 ad_ids.append(i)
             await session.commit()
             print(f"  ✓ {len(ad_ids)} ads loaded")
             
-            # 10. Generate ad logs
+            # 10. Generate ad logs (uses 'action' column)
             print("Loading ad logs...")
             ad_log_count = 0
             for ad_id in ad_ids:
-                num_impressions = random.randint(100, 1000)
+                num_impressions = random.randint(100, 500)  # Reduced for faster loading
                 for _ in range(num_impressions):
                     user_id = random.choice(user_ids)
-                    clicked = random.random() < 0.05
-                    converted = clicked and random.random() < 0.1
                     await session.execute(text("""
-                        INSERT INTO ad_logs (ad_id, user_id, event_type, created_at)
-                        VALUES (:ad_id, :user_id, :event_type, :created_at)
+                        INSERT INTO ad_logs (ad_id, user_id, action, created_at)
+                        VALUES (:ad_id, :user_id, :action, :created_at)
                     """), {
                         "ad_id": ad_id,
                         "user_id": user_id,
-                        "event_type": "conversion" if converted else ("click" if clicked else "impression"),
+                        "action": random.choice(["viewed", "viewed", "viewed", "clicked", "ignored", "dismissed"]),
                         "created_at": now - timedelta(hours=random.randint(0, 720)),
                     })
                     ad_log_count += 1
