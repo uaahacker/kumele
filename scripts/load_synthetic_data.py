@@ -533,13 +533,15 @@ async def load_data(args):
             wallet_user_map = []  # Store (wallet_id, user_id) for NFT generation
             for user_id in random.sample(user_ids, int(len(user_ids) * 0.4)):
                 wallet_id = str(uuid.uuid4())
-                await session.execute(text("""
+                wallet_address = generate_wallet_address()
+                result = await session.execute(text("""
                     INSERT INTO user_wallets (wallet_id, user_id, wallet_address, wallet_type, is_primary)
                     VALUES (:wallet_id, :user_id, :address, :type, :is_primary)
+                    ON CONFLICT (wallet_address) DO NOTHING
                 """), {
                     "wallet_id": wallet_id,
                     "user_id": user_id,
-                    "address": generate_wallet_address(),
+                    "address": wallet_address,
                     "type": "solana",
                     "is_primary": True,
                 })
