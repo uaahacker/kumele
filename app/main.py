@@ -213,7 +213,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "error": "Internal server error",
-            "detail": str(exc) if settings.DEBUG else "An unexpected error occurred"
+            "detail": str(exc) if settings.APP_DEBUG else "An unexpected error occurred"
         }
     )
 
@@ -274,5 +274,5 @@ if __name__ == "__main__":
         "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=settings.DEBUG
+        reload=settings.APP_DEBUG
     )
