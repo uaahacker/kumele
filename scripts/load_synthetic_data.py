@@ -98,8 +98,36 @@ def generate_hash(text: str) -> str:
 
 
 async def create_tables(engine):
-    """Create additional tables if they don't exist (those not in database_models)."""
+    """Create additional tables and add missing columns to existing tables."""
     async with engine.begin() as conn:
+        # Add missing columns to users table (if they don't exist)
+        try:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reward_tier TEXT DEFAULT 'none'"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_language TEXT DEFAULT 'en'"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS location_lat NUMERIC(10,7)"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS location_lon NUMERIC(10,7)"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS age INTEGER"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT"))
+            print("✓ Users table columns verified/added")
+        except Exception as e:
+            print(f"  Note: Users columns may already exist: {e}")
+        
+        # Add missing columns to events table (if they don't exist)
+        try:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS moderation_status TEXT DEFAULT 'pending'"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'en'"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS has_discount BOOLEAN DEFAULT FALSE"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS is_sponsored BOOLEAN DEFAULT FALSE"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS category TEXT"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS location TEXT"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS location_lat NUMERIC(10,7)"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS location_lon NUMERIC(10,7)"))
+            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS tags TEXT[]"))
+            print("✓ Events table columns verified/added")
+        except Exception as e:
+            print(f"  Note: Events columns may already exist: {e}")
+        
         # Blogs table (if not exists)
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS blogs (
