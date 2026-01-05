@@ -2,7 +2,42 @@
 
 A comprehensive AI/ML backend API built with FastAPI for the Kumele platform. This system provides intelligent services including rating systems, personalized recommendations, advertising intelligence, NLP processing, content moderation, AI chatbot, translation services, support automation, and dynamic pricing.
 
-## 📋 Table of Contents
+## � Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** | **Complete deployment, data loading, and testing guide** |
+| [CLIENT_DOCUMENTATION.md](CLIENT_DOCUMENTATION.md) | API integration guide for frontend developers |
+| [TESTING_GUIDE.txt](TESTING_GUIDE.txt) | Detailed API testing instructions |
+| [SUBMISSION_GUIDE.md](SUBMISSION_GUIDE.md) | Project submission checklist |
+
+---
+
+## ⚡ Quick Start (5 Minutes)
+
+```bash
+# 1. Navigate to project
+cd /home/kumele
+
+# 2. Start all services
+docker-compose up -d --build
+
+# 3. Wait 1-2 minutes, then check health
+curl http://YOUR_IP:8000/ai/health
+
+# 4. Load test data
+docker cp scripts/load_data.sql kumele-postgres:/tmp/load_data.sql
+docker exec -it kumele-postgres psql -U kumele -d kumele_db -f /tmp/load_data.sql
+
+# 5. Open Swagger UI in browser
+# http://YOUR_IP:8000/docs
+```
+
+**For detailed deployment instructions, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)**
+
+---
+
+## �📋 Table of Contents
 
 - [Features](#-features)
 - [Architecture](#-architecture)
@@ -71,6 +106,14 @@ A comprehensive AI/ML backend API built with FastAPI for the Kumele platform. Th
 - Discount suggestions (loyalty, new user, last-minute)
 - Confidence scoring for pricing recommendations
 
+### 🎯 Event Matching & Discovery
+- **Location-based matching** using OpenStreetMap Nominatim (geocoding & reverse geocoding)
+- **Haversine distance calculation** for proximity filtering
+- **9-step matching pipeline**: Hard Filters → Location → ML Relevance → Trust → Engagement → Business → Ranking → Explainability → Response
+- **Hobby embeddings** stored in Qdrant (replaced FAISS)
+- **Weighted final scoring**: 45% relevance + 25% trust + 15% engagement + 10% freshness + 5% business
+- **Explainable results**: "Near you", "Matches your interests", "Highly rated host"
+
 ### ❤️ System Health & Monitoring
 - Comprehensive health checks for all AI/ML components
 - System metrics (CPU, Memory, Disk)
@@ -101,6 +144,8 @@ A comprehensive AI/ML backend API built with FastAPI for the Kumele platform. Th
 │  │  │ Support │ │   Pricing   │ │                               │
 │  │  ├─────────┤ ├─────────────┤ │                               │
 │  │  │   Ads   │ │   System    │ │                               │
+│  │  ├─────────┤ ├─────────────┤ │                               │
+│  │  │Matching │ │  Embedding  │ │                               │
 │  │  └─────────┘ └─────────────┘ │                               │
 │  └──────────────────────────────┘                               │
 ├─────────────────────────────────────────────────────────────────┤
@@ -112,6 +157,11 @@ A comprehensive AI/ML backend API built with FastAPI for the Kumele platform. Th
 │  ┌─────────────────────────────────────────────────────────────┐│
 │  │              TGI (Text Generation Inference)                 ││
 │  │                    Mistral 7B LLM                            ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │          OpenStreetMap (Nominatim) - Location Services       ││
+│  │              Geocoding & Reverse Geocoding                   ││
 │  └─────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -125,10 +175,11 @@ A comprehensive AI/ML backend API built with FastAPI for the Kumele platform. Th
 | API Framework | FastAPI 0.109.0 |
 | Database | PostgreSQL 15 + SQLAlchemy Async |
 | Cache/Queue | Redis 7 |
-| Vector DB | Qdrant |
+| Vector DB | Qdrant (replaces FAISS) |
 | Task Queue | Celery 5.3.4 |
 | LLM | Mistral 7B via TGI |
 | Translation | LibreTranslate |
+| Location Services | OpenStreetMap Nominatim |
 | Embeddings | sentence-transformers/all-MiniLM-L6-v2 |
 | Sentiment | cardiffnlp/twitter-roberta-base-sentiment |
 | Moderation | unitary/toxic-bert |
@@ -489,6 +540,52 @@ curl "http://localhost:8000/discount/suggest?user_id=user-123&event_id=event-456
 curl http://localhost:8000/taxonomy/categories
 ```
 
+#### 11. Test Event Matching
+```bash
+# Match events by location (using lat/lon)
+curl "http://localhost:8000/match/events?user_id=1&lat=51.5074&lon=-0.1278&max_distance_km=25&limit=10"
+
+# Match events by address (OpenStreetMap geocoding)
+curl "http://localhost:8000/match/events?user_id=1&address=London,%20UK&max_distance_km=25"
+
+# Get score breakdown for a specific match
+curl "http://localhost:8000/match/score-breakdown/event-123?user_id=1"
+
+# Geocode an address
+curl -X POST "http://localhost:8000/match/geocode?address=221B%20Baker%20Street,%20London"
+```
+Expected response (match/events):
+```json
+{
+  "user_id": "1",
+  "matched_events": [
+    {
+      "event_id": "sample-001",
+      "title": "Morning Yoga in the Park",
+      "category": "fitness",
+      "distance_km": 2.5,
+      "score": 0.92,
+      "reasons": ["Near you", "Matches your interests", "Highly rated host"],
+      "score_breakdown": {
+        "relevance": 0.90,
+        "trust": 0.88,
+        "engagement": 0.75,
+        "freshness": 0.95,
+        "business": 0.0
+      }
+    }
+  ],
+  "weights_used": {
+    "relevance": 0.45,
+    "trust": 0.25,
+    "engagement": 0.15,
+    "freshness": 0.10,
+    "business": 0.05
+  },
+  "pipeline_version": "v2.0_authoritative"
+}
+```
+
 ### Running Automated Tests
 
 ```bash
@@ -586,6 +683,23 @@ hey -n 100 -c 10 -m POST \
 | GET | `/ads/{ad_id}/analytics` | Get ad analytics |
 | GET | `/ads/segments` | List audience segments |
 | GET | `/ads/top-performing` | Get top performing ads |
+
+### Matching (`/match`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/match/events` | Match events to user (9-step pipeline) |
+| GET | `/match/score-breakdown/{event_id}` | Get detailed score breakdown |
+| POST | `/match/geocode` | Geocode address (OpenStreetMap) |
+
+**Matching Pipeline:**
+1. **Hard Filters** (SQL): status, date, capacity, moderation, language
+2. **Location Filter** (App): Haversine distance within radius_km
+3. **ML Relevance** (Qdrant): User-event embedding similarity
+4. **Trust Score**: Host rating (70% reviews + 30% completion)
+5. **Engagement**: clicks, RSVPs, saves (time-decay)
+6. **Business Signals**: rewards, discounts, sponsored (capped at 10%)
+7. **Final Score**: `0.45×relevance + 0.25×trust + 0.15×engagement + 0.10×freshness + 0.05×business`
+8. **Explainability**: "Near you", "Matches interests", etc.
 
 ### NLP Services (`/nlp`)
 | Method | Endpoint | Description |

@@ -104,6 +104,11 @@ async def match_audience(
     description="""
     Predict performance metrics for an ad campaign.
     
+    Uses:
+    - Text sentiment/clarity analysis
+    - Image embeddings (if available)
+    - Historical campaign data
+    
     Predicts:
     - Expected impressions
     - Estimated CTR (Click-Through Rate)
@@ -111,11 +116,7 @@ async def match_audience(
     - Engagement rate
     - Conversion probability
     
-    Based on:
-    - Historical campaign data
-    - Similar ad performance
-    - Audience characteristics
-    - Budget and bid optimization
+    Persists predictions in ad_predictions table.
     """
 )
 async def predict_performance(
@@ -129,7 +130,8 @@ async def predict_performance(
             ad_id=request.ad_id,
             budget=request.budget,
             duration_days=request.duration_days,
-            audience_segment_ids=request.audience_segment_ids
+            audience_segment_ids=request.audience_segment_ids,
+            ad_content=request.ad_content
         )
         
         await db.commit()

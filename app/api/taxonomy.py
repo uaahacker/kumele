@@ -38,6 +38,8 @@ router = APIRouter(prefix="/taxonomy", tags=["Taxonomy"])
     description="""
     Get hierarchical interest/hobby taxonomy.
     
+    Supports incremental sync with `updated_since` parameter.
+    
     Returns:
     - Top-level categories
     - Nested subcategories
@@ -47,16 +49,34 @@ router = APIRouter(prefix="/taxonomy", tags=["Taxonomy"])
     - User profile interest selection
     - Event categorization
     - Content tagging
+    
+    **Sync Pattern:**
+    - First load: GET /taxonomy/interests (full)
+    - Incremental: GET /taxonomy/interests?updated_since=2025-01-01T00:00:00
+    
+    **Cache Headers:**
+    Response includes version info for caching.
     """
 )
 async def get_interests(
     parent_id: Optional[str] = Query(None, description="Parent category ID"),
     include_children: bool = Query(True, description="Include child categories"),
+    updated_since: Optional[str] = Query(None, description="ISO timestamp for incremental sync"),
+    language: str = Query("en", description="Language for labels"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get interest taxonomy."""
     try:
         from app.models.database_models import InterestTaxonomy, InterestMetadata, InterestTranslation
+        from datetime import datetime as dt
+        
+        # Parse updated_since if provided
+        since_date = None
+        if updated_since:
+            try:
+                since_date = dt.fromisoformat(updated_since.replace("Z", "+00:00"))
+            except ValueError:
+                pass
         
         # Build query based on parent_id
         # Model uses: interest_id (string), parent_id (string), level, is_active
@@ -76,6 +96,10 @@ async def get_interests(
                 )
             )
         
+        # Filter by updated_since for incremental sync
+        if since_date:
+            query = query.where(InterestTaxonomy.updated_at >= since_date)
+        
         result = await db.execute(query)
         items = result.scalars().all()
         
@@ -92,22 +116,34 @@ async def get_interests(
             meta_result = await db.execute(meta_query)
             metadata = meta_result.scalar_one_or_none()
             
-            # Get translation for name
+            # Get translation for name (use requested language with fallback to en)
             trans_query = select(InterestTranslation).where(
                 and_(
                     InterestTranslation.interest_id == item.interest_id,
-                    InterestTranslation.language_code == "en"
+                    InterestTranslation.language_code == language
                 )
             )
             trans_result = await db.execute(trans_query)
             translation = trans_result.scalar_one_or_none()
+            
+            # Fallback to English if translation not found
+            if not translation and language != "en":
+                fallback_query = select(InterestTranslation).where(
+                    and_(
+                        InterestTranslation.interest_id == item.interest_id,
+                        InterestTranslation.language_code == "en"
+                    )
+                )
+                fallback_result = await db.execute(fallback_query)
+                translation = fallback_result.scalar_one_or_none()
             
             node = {
                 "id": item.interest_id,
                 "name": translation.label if translation else item.interest_id.replace("_", " ").title(),
                 "slug": item.interest_id,
                 "icon": metadata.icon_key if metadata else "🎯",
-                "level": item.level or 0
+                "level": item.level or 0,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None
             }
             
             if include_children:
@@ -130,8 +166,18 @@ async def get_interests(
         
         categories = [await build_tree(item) for item in items]
         
+        # Calculate version hash for caching
+        from datetime import datetime as dt
+        latest_update = max(
+            (item.updated_at for item in items if item.updated_at),
+            default=dt.utcnow()
+        )
+        
         return {
-            "categories": categories
+            "categories": categories,
+            "version": latest_update.isoformat() if latest_update else None,
+            "language": language,
+            "count": len(categories)
         }
         
     except Exception as e:

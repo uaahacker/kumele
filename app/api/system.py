@@ -179,3 +179,86 @@ async def llm_health():
         
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+@router.get(
+    "/models",
+    summary="List AI Models",
+    description="""
+    List all registered AI/ML models.
+    
+    Returns:
+    - Model name and type
+    - Status (loaded/inactive)
+    - Provider (huggingface, tgi, argos, etc.)
+    
+    Foundation-ready endpoint.
+    """
+)
+async def list_ai_models(
+    db: AsyncSession = Depends(get_db)
+):
+    """List registered AI models."""
+    try:
+        result = await SystemService.get_ai_models(db)
+        return result
+        
+    except Exception as e:
+        logger.error(f"List models error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/reload-model",
+    summary="Reload AI Model",
+    description="""
+    Reload/refresh an AI model.
+    
+    Use cases:
+    - Force model cache refresh
+    - Apply model updates
+    - Reset model state
+    
+    Foundation-ready endpoint.
+    """
+)
+async def reload_model(
+    model_name: str
+):
+    """Reload an AI model."""
+    try:
+        result = await SystemService.reload_model(model_name)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Reload model error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/stats",
+    summary="AI System Statistics",
+    description="""
+    Get AI system usage statistics.
+    
+    Returns:
+    - AI action counts (24h)
+    - Chatbot query counts (24h)
+    - Worker queue depth
+    - System metrics
+    
+    Foundation-ready endpoint.
+    """
+)
+async def get_ai_stats(
+    db: AsyncSession = Depends(get_db)
+):
+    """Get AI system statistics."""
+    try:
+        result = await SystemService.get_ai_stats(db)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Get AI stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

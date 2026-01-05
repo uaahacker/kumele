@@ -220,6 +220,42 @@ async def get_email_details(
 
 
 @router.get(
+    "/email/list",
+    summary="List Support Emails",
+    description="""
+    List all support emails with filters.
+    
+    Returns paginated list of emails with status, category, and priority.
+    Used by admin/support UI.
+    """
+)
+async def list_emails(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    priority_min: Optional[int] = Query(None, ge=1, le=5, description="Minimum priority"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db)
+):
+    """List support emails (alias for queue endpoint)."""
+    try:
+        result = await SupportService.get_email_queue(
+            db=db,
+            status=status,
+            category=category,
+            priority_min=priority_min,
+            limit=limit,
+            offset=offset
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"List emails error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
     "/email/queue",
     summary="Get Email Queue",
     description="Get support email queue with filters."

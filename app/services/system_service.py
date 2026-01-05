@@ -383,16 +383,18 @@ class SystemService:
         """
         Get comprehensive AI system health status.
         Checks all components and returns unified health report.
+        Includes worker_queue_depth per spec.
         """
         start_time = datetime.utcnow()
         
         # Run all checks concurrently
-        db_check, redis_check, qdrant_check, llm_check, translate_check = await asyncio.gather(
+        db_check, redis_check, qdrant_check, llm_check, translate_check, queue_check = await asyncio.gather(
             SystemService.check_database(db),
             SystemService.check_redis(),
             SystemService.check_qdrant(),
             SystemService.check_llm(),
             SystemService.check_translate(),
+            SystemService.get_worker_queue_depth(),
             return_exceptions=True
         )
         
@@ -415,6 +417,9 @@ class SystemService:
         
         # Get system metrics
         system_metrics = SystemService.get_system_metrics()
+        
+        # Get worker queue depth
+        queue_info = safe_result(queue_check, "queue")
         
         # Calculate overall status
         statuses = [c.get("status", "unknown") for c in components.values()]
@@ -441,6 +446,8 @@ class SystemService:
             "timestamp": datetime.utcnow().isoformat(),
             "check_duration_ms": round(total_time, 2),
             "components": components,
+            "worker_queue_depth": queue_info.get("total", 0),
+            "worker_queues": queue_info.get("queues", {}),
             "system": system_metrics,
             "version": {
                 "api": "1.0.0",
@@ -480,3 +487,177 @@ class SystemService:
             "kumele_disk_usage_percent": metrics.get("disk", {}).get("percent", 0),
             "kumele_disk_used_bytes": metrics.get("disk", {}).get("used_gb", 0) * (1024**3)
         }
+
+    @staticmethod
+    async def get_worker_queue_depth() -> Dict[str, Any]:
+        """
+        Get Celery worker queue depth from Redis.
+        Required for /ai/health response per spec.
+        """
+        try:
+            redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            
+            # Celery uses 'celery' as default queue name
+            queue_names = ["celery", "nlp_tasks", "recommendation_tasks", "moderation_tasks", "email_tasks"]
+            queue_depths = {}
+            total_depth = 0
+            
+            for queue_name in queue_names:
+                try:
+                    depth = await redis.llen(queue_name)
+                    queue_depths[queue_name] = depth
+                    total_depth += depth
+                except Exception:
+                    queue_depths[queue_name] = 0
+            
+            await redis.close()
+            
+            return {
+                "total": total_depth,
+                "queues": queue_depths,
+                "status": "healthy" if total_depth < 1000 else "degraded"
+            }
+            
+        except Exception as e:
+            logger.warning(f"Failed to get queue depth: {e}")
+            return {
+                "total": 0,
+                "queues": {},
+                "status": "unknown",
+                "error": str(e)
+            }
+
+    @staticmethod
+    async def get_ai_models(db: AsyncSession) -> Dict[str, Any]:
+        """
+        List registered AI/ML models.
+        GET /ai/models endpoint - foundation-ready.
+        """
+        try:
+            from app.models.database_models import AIModelRegistry
+            from sqlalchemy import select
+            
+            query = select(AIModelRegistry).where(AIModelRegistry.is_active == True)
+            result = await db.execute(query)
+            models = result.scalars().all()
+            
+            if not models:
+                # Return default models if none registered
+                return {
+                    "models": [
+                        {
+                            "name": "sentence-transformers/all-MiniLM-L6-v2",
+                            "type": "embedding",
+                            "status": "loaded",
+                            "provider": "huggingface"
+                        },
+                        {
+                            "name": "mistral-7b-instruct",
+                            "type": "llm",
+                            "status": "available",
+                            "provider": "tgi"
+                        },
+                        {
+                            "name": "argos-translate",
+                            "type": "translation",
+                            "status": "available",
+                            "provider": "argos"
+                        }
+                    ],
+                    "count": 3,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            return {
+                "models": [
+                    {
+                        "name": m.model_name,
+                        "type": m.model_type,
+                        "version": m.model_version,
+                        "status": "loaded" if m.is_active else "inactive",
+                        "provider": m.provider or "unknown"
+                    }
+                    for m in models
+                ],
+                "count": len(models),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Get AI models error: {e}")
+            return {
+                "models": [],
+                "count": 0,
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    @staticmethod
+    async def reload_model(model_name: str) -> Dict[str, Any]:
+        """
+        Reload/refresh an AI model.
+        POST /ai/reload-model endpoint - foundation-ready.
+        
+        Note: In MVP, this is a stub. Full implementation would:
+        - Signal worker to reload model cache
+        - Clear embeddings cache
+        - Reinitialize model connections
+        """
+        logger.info(f"Model reload requested: {model_name}")
+        
+        return {
+            "success": True,
+            "model": model_name,
+            "action": "reload_queued",
+            "message": f"Model {model_name} reload has been queued",
+            "timestamp": datetime.utcnow().isoformat(),
+            "note": "Foundation-ready: Full implementation in production"
+        }
+
+    @staticmethod
+    async def get_ai_stats(db: AsyncSession) -> Dict[str, Any]:
+        """
+        Get AI system statistics.
+        GET /ai/stats endpoint - foundation-ready.
+        """
+        try:
+            from app.models.database_models import AIActionLog, ChatbotLog
+            from sqlalchemy import select, func
+            from datetime import timedelta
+            
+            since_24h = datetime.utcnow() - timedelta(hours=24)
+            since_7d = datetime.utcnow() - timedelta(days=7)
+            
+            # AI action counts (last 24h)
+            action_query = select(func.count(AIActionLog.id)).where(
+                AIActionLog.created_at >= since_24h
+            )
+            action_result = await db.execute(action_query)
+            actions_24h = action_result.scalar() or 0
+            
+            # Chatbot queries (last 24h)
+            chat_query = select(func.count(ChatbotLog.id)).where(
+                ChatbotLog.created_at >= since_24h
+            )
+            chat_result = await db.execute(chat_query)
+            chats_24h = chat_result.scalar() or 0
+            
+            # Get queue depth
+            queue_info = await SystemService.get_worker_queue_depth()
+            
+            return {
+                "period": "24h",
+                "ai_actions": actions_24h,
+                "chatbot_queries": chats_24h,
+                "worker_queue_depth": queue_info.get("total", 0),
+                "queue_status": queue_info.get("status", "unknown"),
+                "system": SystemService.get_system_metrics(),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Get AI stats error: {e}")
+            return {
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }

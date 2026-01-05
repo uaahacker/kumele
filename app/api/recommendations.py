@@ -203,3 +203,164 @@ async def get_similar_users(
     except Exception as e:
         logger.error(f"Get similar users error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# TFRS TWO-TOWER MODEL ENDPOINTS
+# =============================================================================
+
+@router.get(
+    "/tfrs/events",
+    summary="TFRS Event Recommendations",
+    description="""
+    Get personalized event recommendations using TensorFlow Recommenders (TFRS) 
+    Two-Tower architecture.
+    
+    Two-Tower Model:
+    - **User Tower**: Encodes user features (hobbies, engagement, demographics, rewards)
+    - **Event Tower**: Encodes event features (category, tags, host rating, engagement)
+    - **Scoring**: Dot-product similarity for fast retrieval
+    
+    ML Inputs:
+    - User hobbies and preference scores
+    - Event attendance history
+    - Blog/article reading patterns
+    - Ad interaction behavior
+    - Reward tier status
+    - Location preferences
+    
+    Returns ranked events with explainable reasons.
+    """
+)
+async def get_tfrs_recommendations(
+    user_id: str = Query(..., description="User ID"),
+    category: Optional[str] = Query(None, description="Category filter"),
+    location: Optional[str] = Query(None, description="Location filter"),
+    limit: int = Query(20, ge=1, le=50, description="Max results"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get TFRS-based personalized recommendations."""
+    try:
+        # Import here to avoid circular imports
+        from app.services.tfrs_service import TFRSService
+        
+        result = await TFRSService.get_recommendations(
+            db=db,
+            user_id=user_id,
+            limit=limit,
+            category_filter=category,
+            location_filter=location
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"TFRS recommendations error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/tfrs/user-embedding/{user_id}",
+    summary="Generate User Embedding",
+    description="""
+    Generate and store User Tower embedding for a user.
+    
+    Combines:
+    - Hobby preferences (35%)
+    - Engagement history (25%)
+    - Demographics (15%)
+    - Reward tier (10%)
+    - Blog interests (10%)
+    - Ad interactions (5%)
+    
+    Stores embedding in Qdrant for fast similarity search.
+    """
+)
+async def generate_user_embedding(
+    user_id: str,
+    store_to_qdrant: bool = Query(True, description="Store embedding to Qdrant"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate and optionally store user embedding."""
+    try:
+        from app.services.tfrs_service import TFRSService
+        
+        embedding, features = await TFRSService.generate_user_embedding(db, user_id)
+        
+        if store_to_qdrant:
+            stored = await TFRSService.store_user_embedding_to_qdrant(
+                user_id, embedding, features
+            )
+        else:
+            stored = False
+        
+        return {
+            "user_id": user_id,
+            "embedding_dimension": len(embedding),
+            "features_extracted": list(features.keys()),
+            "stored_to_qdrant": stored,
+            "embedding_sample": embedding[:10]  # First 10 dims for debugging
+        }
+        
+    except Exception as e:
+        logger.error(f"Generate user embedding error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/tfrs/event-embedding/{event_id}",
+    summary="Generate Event Embedding",
+    description="""
+    Generate and store Event Tower embedding for an event.
+    
+    Combines:
+    - Category (30%)
+    - Tags (25%)
+    - Host rating (20%)
+    - Engagement stats (15%)
+    - Price tier (10%)
+    
+    Stores embedding in Qdrant for fast similarity search.
+    """
+)
+async def generate_event_embedding(
+    event_id: int,
+    store_to_qdrant: bool = Query(True, description="Store embedding to Qdrant"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate and optionally store event embedding."""
+    try:
+        from app.services.tfrs_service import TFRSService
+        from app.models.database_models import Event
+        from sqlalchemy import select
+        
+        # Get event
+        query = select(Event).where(Event.event_id == event_id)
+        result = await db.execute(query)
+        event = result.scalar_one_or_none()
+        
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        embedding, features = await TFRSService.generate_event_embedding(db, event)
+        
+        if store_to_qdrant:
+            stored = await TFRSService.store_event_embedding_to_qdrant(
+                str(event_id), embedding, features
+            )
+        else:
+            stored = False
+        
+        return {
+            "event_id": event_id,
+            "embedding_dimension": len(embedding),
+            "features_extracted": features,
+            "stored_to_qdrant": stored,
+            "embedding_sample": embedding[:10]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Generate event embedding error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -115,6 +115,7 @@ async def analyze_sentiment(
     - Location indicators
     
     Returns keywords with frequency and relevance scores.
+    Stores results in nlp_keywords table when content_id provided.
     """
 )
 async def extract_keywords(
@@ -128,9 +129,38 @@ async def extract_keywords(
             max_keywords=request.max_keywords or 10
         )
         
+        # Store keywords if content_id provided
+        if hasattr(request, 'content_id') and request.content_id:
+            try:
+                content_id_int = int(request.content_id)
+                keywords = [k["keyword"] for k in result.get("keywords", [])]
+                entities = [e["text"] for e in result.get("entities", [])]
+                await NLPService.store_keywords(
+                    db=db,
+                    content_id=content_id_int,
+                    keywords=keywords,
+                    entities=entities
+                )
+                await db.commit()
+            except Exception as store_err:
+                logger.warning(f"Failed to store keywords: {store_err}")
+        
+        # Update topic daily for trend tracking
+        try:
+            keywords = [k["keyword"] for k in result.get("keywords", [])]
+            if keywords:
+                await NLPService.update_topic_daily(
+                    db=db,
+                    keywords=keywords[:5]  # Top 5 keywords
+                )
+                await db.commit()
+        except Exception as trend_err:
+            logger.warning(f"Failed to update trends: {trend_err}")
+        
         return result
         
     except Exception as e:
+        await db.rollback()
         logger.error(f"Keyword extraction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -147,6 +177,9 @@ async def extract_keywords(
     - Popular discussion topics
     - Emerging interests
     - Sentiment trends
+    
+    Aggregates keywords by frequency and growth.
+    Stores trends in nlp_topic_daily and nlp_trends tables.
     
     Configurable by timeframe and category.
     """
@@ -165,6 +198,13 @@ async def get_trends(
             category=category,
             limit=limit
         )
+        
+        # Update nlp_trends table with computed trends
+        try:
+            await NLPService.update_trends_table(db=db)
+            await db.commit()
+        except Exception as trend_err:
+            logger.warning(f"Failed to update nlp_trends: {trend_err}")
         
         return result
         
@@ -226,4 +266,93 @@ async def update_topics(
     except Exception as e:
         await db.rollback()
         logger.error(f"Update topics error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/summarize",
+    summary="Summarize Text",
+    description="""
+    Summarize text using extractive or abstractive methods.
+    
+    Methods:
+    - **extractive**: Selects most important sentences (faster, reliable)
+    - **abstractive**: Generates new summary using LLM (via TGI/Mistral)
+    
+    Use Cases:
+    - Event description summaries
+    - Blog post abstracts
+    - Long review condensation
+    - Email thread summaries
+    
+    Returns:
+    - Summary text
+    - Method used (extractive/abstractive)
+    - Compression ratio
+    """
+)
+async def summarize_text(
+    text: str,
+    max_length: int = Query(default=150, ge=20, le=500, description="Max words in summary"),
+    min_length: int = Query(default=30, ge=10, le=100, description="Min words in summary"),
+    style: str = Query(default="extractive", description="extractive or abstractive")
+):
+    """Summarize text."""
+    try:
+        if len(text.strip()) < 50:
+            return {
+                "summary": text.strip(),
+                "method": "passthrough",
+                "original_length": len(text.split()),
+                "summary_length": len(text.split()),
+                "compression_ratio": 1.0
+            }
+        
+        result = await NLPService.summarize_text(
+            text=text,
+            max_length=max_length,
+            min_length=min_length,
+            style=style
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Summarize error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/batch/summarize",
+    summary="Batch Summarize",
+    description="Summarize multiple texts in batch."
+)
+async def batch_summarize(
+    texts: List[str],
+    max_length: int = Query(default=150, ge=20, le=500),
+    style: str = Query(default="extractive")
+):
+    """Batch summarize multiple texts."""
+    try:
+        if len(texts) > 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Maximum 50 texts per batch"
+            )
+        
+        results = await NLPService.batch_summarize(
+            texts=texts,
+            max_length=max_length,
+            style=style
+        )
+        
+        return {
+            "results": results,
+            "count": len(results)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch summarize error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

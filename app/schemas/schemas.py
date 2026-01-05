@@ -127,6 +127,7 @@ class AudienceSegmentItem(BaseModel):
     segment_name: str
     match_score: float = Field(..., ge=0, le=100)
     audience_size: int
+    targeting_hobbies: Optional[List[str]] = None
 
 
 class AudienceMatchResponse(BaseModel):
@@ -134,6 +135,8 @@ class AudienceMatchResponse(BaseModel):
     ad_id: Optional[str] = None
     segments: List[AudienceSegmentItem]
     total_reach: int
+    extracted_themes: Optional[List[str]] = None  # Themes extracted via NLP
+    model: Optional[str] = None  # Model used
 
 
 class AdPerformancePredictionRequest(BaseModel):
@@ -142,6 +145,7 @@ class AdPerformancePredictionRequest(BaseModel):
     budget: float = Field(..., gt=0)
     duration_days: int = Field(..., ge=1, le=365)
     audience_segment_ids: Optional[List[str]] = None
+    ad_content: Optional[str] = None  # For sentiment/clarity analysis
 
 
 class AdPerformancePredictionResponse(BaseModel):
@@ -154,6 +158,8 @@ class AdPerformancePredictionResponse(BaseModel):
     predicted_engagement_rate: float
     confidence: float
     recommendations: List[str] = []
+    content_analysis: Optional[Dict[str, Any]] = None  # Sentiment/clarity analysis
+    model: Optional[str] = None  # Model used for prediction
 
 
 # ============================================
@@ -184,6 +190,7 @@ class KeywordRequest(BaseModel):
     """Request for keyword extraction."""
     text: str = Field(..., min_length=1, max_length=10000)
     max_keywords: Optional[int] = Field(10, ge=1, le=50)
+    content_id: Optional[str] = None  # For storing keywords in nlp_keywords table
     
     class Config:
         json_schema_extra = {
@@ -360,6 +367,8 @@ class I18nStringsResponse(BaseModel):
     """Response for i18n strings."""
     language: str
     strings: Dict[str, str]
+    is_rtl: bool = False
+    direction: str = "ltr"  # "ltr" or "rtl"
 
 
 class TranslationApprovalRequest(BaseModel):
@@ -444,34 +453,69 @@ class SupportEmailDetailsResponse(BaseModel):
 # ============================================
 # PRICING SCHEMAS
 # ============================================
+class PriceTier(BaseModel):
+    """Single price tier recommendation."""
+    name: str  # economy, standard, premium
+    price: float
+    predicted_attendance: int
+    predicted_revenue: float
+
+
 class PriceOptimizeResponse(BaseModel):
-    """Response for price optimization."""
+    """Response for price optimization with tiers."""
     event_id: str
     base_price: float
-    suggested_price: float
-    price_change_percent: float
+    price_tiers: List[PriceTier]
+    optimal_tier: PriceTier
     factors: Dict[str, float]
     metrics: Dict[str, Any]
     confidence: float
     recommendation: str
+    note: str = "Prices are recommendations only. Host decides final price."
+
+
+class UpliftEstimate(BaseModel):
+    """Uplift estimation for discount."""
+    uplift_percent: float
+    expected_additional_bookings: float
+    estimated_revenue_gain: float
+    discount_cost: float
+    estimated_roi: float
+    confidence: float
+    model: str = "prophet_regression_hybrid"
 
 
 class DiscountSuggestionItem(BaseModel):
-    """Single discount suggestion."""
+    """Single discount suggestion with uplift analysis."""
     type: str
+    segment: Optional[str] = None  # gold, silver, bronze, new_user, etc.
     code: Optional[str] = None
     discount_percent: int
     description: str
     valid_until: Optional[str] = None
     relevance_score: float
+    uplift: Optional[UpliftEstimate] = None
+    roi: Optional[float] = None
+
+
+class SegmentAnalysis(BaseModel):
+    """User/event segment analysis."""
+    segment: Optional[str] = None
+    tier: Optional[str] = None
+    discount_cap: Optional[int] = None
 
 
 class DiscountSuggestionResponse(BaseModel):
-    """Response for discount suggestions."""
-    suggestions: List[DiscountSuggestionItem]
+    """Response for discount suggestions with ROI optimization."""
+    best_discount: Optional[DiscountSuggestionItem] = None
+    alternates: List[DiscountSuggestionItem] = []
+    segment_analysis: Dict[str, Any] = {}
+    all_suggestions: List[DiscountSuggestionItem] = []
+    confidence: float
     user_id: Optional[str] = None
     event_id: Optional[str] = None
     generated_at: str
+    note: str = "Discount suggestions are recommendations only."
 
 
 # ============================================
@@ -666,7 +710,7 @@ class AttendancePredictionResponse(BaseModel):
     expected_actual_attendance: int
     estimated_no_show_rate: float
     factors: Dict[str, float]
-    metrics: Dict[str, str]
+    metrics: Dict[str, Any]  # Changed to Any to support nested metrics
     computed_at: str
 
 
@@ -676,6 +720,7 @@ class RankedDay(BaseModel):
     day_index: int
     avg_attendance: float
     factor: float
+    data_points: Optional[int] = None  # Number of data points (for timeseries)
 
 
 class RankedTime(BaseModel):
@@ -700,5 +745,7 @@ class TrendPredictionResponse(BaseModel):
     ranked_times: List[RankedTime]
     best_combination: BestCombination
     historical_events_analyzed: int
+    data_source: Optional[str] = None  # 'timeseries_daily' or 'event_attendance'
+    model: Optional[str] = None  # Model used
     confidence_score: float
     computed_at: str

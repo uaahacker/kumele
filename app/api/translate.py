@@ -153,6 +153,9 @@ i18n_router = APIRouter(prefix="/i18n", tags=["Internationalization"])
     - `support` - Support/help strings
     
     Example: `/i18n/fr?scope=events`
+    
+    **RTL Support:**
+    Response includes `is_rtl` flag for Arabic (ar) and Hebrew (he).
     """
 )
 async def get_i18n_strings(
@@ -167,9 +170,15 @@ async def get_i18n_strings(
         
         strings = await TranslationService.get_i18n_strings(db, language, scope)
         
+        # RTL languages: Arabic and Hebrew
+        rtl_languages = {"ar", "he"}
+        is_rtl = language in rtl_languages
+        
         return {
             "language": language,
-            "strings": strings
+            "strings": strings,
+            "is_rtl": is_rtl,
+            "direction": "rtl" if is_rtl else "ltr"
         }
         
     except Exception as e:

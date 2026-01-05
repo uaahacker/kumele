@@ -30,8 +30,12 @@ class User(Base):
     preferred_language = Column(Text, default="en")
     created_at = Column(DateTime, default=datetime.utcnow)
     
+    # Matching & Rewards fields
+    reward_tier = Column(Text, default="none")  # Business signal for matching
+    
     __table_args__ = (
         CheckConstraint("gender IN ('male', 'female', 'other')"),
+        CheckConstraint("reward_tier IN ('none', 'bronze', 'silver', 'gold')"),
     )
 
 
@@ -55,8 +59,16 @@ class Event(Base):
     status = Column(Text, default="scheduled")
     created_at = Column(DateTime, default=datetime.utcnow)
     
+    # Matching pipeline fields (per requirements)
+    moderation_status = Column(Text, default="pending")  # Hard filter: must be 'approved'
+    language = Column(Text, default="en")  # Hard filter: match user preference
+    has_discount = Column(Boolean, default=False)  # Business signal boost
+    is_sponsored = Column(Boolean, default=False)  # Business signal boost (capped)
+    tags = Column(ARRAY(Text))  # For event embedding generation
+    
     __table_args__ = (
         CheckConstraint("status IN ('draft', 'scheduled', 'ongoing', 'completed', 'cancelled')"),
+        CheckConstraint("moderation_status IN ('pending', 'approved', 'rejected')"),
     )
 
 
@@ -140,6 +152,9 @@ class HostRatingAggregate(Base):
     attendance_follow_through = Column(Numeric(5, 4))
     repeat_attendee_ratio = Column(Numeric(5, 4))
     
+    # Matching pipeline field (alias for event_completion_ratio)
+    completion_rate = Column(Numeric(5, 4))  # Used by trust scoring: 0.7×reviews + 0.3×completion
+    
     # Badges (JSON array)
     badges = Column(JSONB, default=[])
     
@@ -158,6 +173,10 @@ class EventStats(Base):
     completed = Column(Boolean, default=False)
     cancelled = Column(Boolean, default=False)
     updated_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Engagement metrics for matching pipeline
+    clicks = Column(Integer, default=0)  # Event page views
+    saves = Column(Integer, default=0)  # User bookmarks/saves
 
 
 # ============================================
@@ -382,6 +401,36 @@ class EmbeddingsMetadata(Base):
 
 
 # ============================================
+# KNOWLEDGE EMBEDDINGS (spec requirement)
+# Note: Actual embeddings stored in Qdrant, NOT PostgreSQL
+# This table tracks embedding metadata only
+# ============================================
+class KnowledgeEmbedding(Base):
+    """
+    Tracks knowledge base embeddings.
+    
+    IMPORTANT: Per spec, embeddings are stored in Qdrant vector DB,
+    NOT in PostgreSQL. This table only stores metadata/references.
+    """
+    __tablename__ = "knowledge_embeddings"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("knowledge_documents.id", ondelete="CASCADE"))
+    chunk_text = Column(Text)  # Optional: store text for reference
+    chunk_index = Column(Integer, default=0)
+    vector_id = Column(Text, nullable=False)  # Qdrant vector ID reference
+    embedding_model = Column(Text, default="sentence-transformers/all-MiniLM-L6-v2")
+    dimensions = Column(Integer, default=384)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    __table_args__ = (
+        Index("idx_knowledge_emb_doc", "document_id"),
+        Index("idx_knowledge_emb_vector", "vector_id"),
+    )
+
+
+# ============================================
 # CHATBOT LOGS
 # ============================================
 class ChatbotLog(Base):
@@ -602,6 +651,10 @@ class InterestTranslation(Base):
 # PRICING HISTORY
 # ============================================
 class PricingHistory(Base):
+    """
+    Historical pricing data for sklearn regression training.
+    Used to model price elasticity and predict optimal prices.
+    """
     __tablename__ = "pricing_history"
     
     id = Column(BigInteger, primary_key=True, autoincrement=True)
@@ -610,9 +663,16 @@ class PricingHistory(Base):
     turnout = Column(Integer)
     host_score = Column(Numeric(5, 2))
     city = Column(Text)
+    category = Column(Text)  # Event category for similar event matching
+    capacity = Column(Integer)  # Event capacity
     event_date = Column(Date)
     revenue = Column(Numeric(14, 2))
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index("idx_pricing_history_category", "category"),
+        Index("idx_pricing_history_city", "city"),
+    )
 
 
 # ============================================
@@ -788,3 +848,352 @@ class TimeSeriesHourly(Base):
         UniqueConstraint("ds", "category", "location", "metric_type"),
         Index("idx_timeseries_hourly_ds", "ds"),
     )
+
+
+# ============================================
+# USER BLOCKS - For matching pipeline hard filters
+# ============================================
+class UserBlock(Base):
+    """
+    User block relationships - used in matching pipeline to exclude
+    events from blocked users/hosts.
+    
+    Hard filter in Step 1: Events from blocked hosts are excluded.
+    """
+    __tablename__ = "user_blocks"
+    
+    block_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    blocker_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    blocked_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    reason = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        UniqueConstraint("blocker_id", "blocked_id", name="uq_user_block"),
+        Index("idx_user_blocks_blocker", "blocker_id"),
+        Index("idx_user_blocks_blocked", "blocked_id"),
+    )
+
+
+# ============================================
+# WEB3 / SOLANA - USER WALLETS
+# ============================================
+class UserWallet(Base):
+    """
+    User cryptocurrency wallets - Solana only (per requirements).
+    No Polygon/Hardhat/ethers.
+    """
+    __tablename__ = "user_wallets"
+    
+    wallet_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    wallet_address = Column(Text, unique=True, nullable=False)  # Solana public key
+    wallet_type = Column(Text, default="solana")  # Only solana supported
+    is_primary = Column(Boolean, default=False)
+    is_verified = Column(Boolean, default=False)
+    verification_signature = Column(Text)  # Signature proving ownership
+    sol_balance = Column(Numeric(18, 9), default=0)  # SOL balance (9 decimals)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_synced = Column(DateTime)
+    
+    __table_args__ = (
+        CheckConstraint("wallet_type = 'solana'"),  # Solana only
+        Index("idx_user_wallets_user", "user_id"),
+        Index("idx_user_wallets_address", "wallet_address"),
+    )
+
+
+# ============================================
+# WEB3 / SOLANA - USER NFTs
+# ============================================
+class UserNFT(Base):
+    """
+    User-owned NFTs on Solana blockchain.
+    Used for rewards, badges, and event tickets.
+    """
+    __tablename__ = "user_nfts"
+    
+    nft_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    wallet_id = Column(UUID(as_uuid=True), ForeignKey("user_wallets.wallet_id", ondelete="CASCADE"))
+    mint_address = Column(Text, unique=True, nullable=False)  # Solana NFT mint address
+    token_account = Column(Text)  # Associated token account
+    nft_type = Column(Text, nullable=False)  # badge, ticket, reward, collectible
+    name = Column(Text)
+    symbol = Column(Text)
+    uri = Column(Text)  # Metadata URI (usually Arweave/IPFS)
+    image_url = Column(Text)
+    attributes = Column(JSONB)  # NFT attributes/traits
+    collection_address = Column(Text)  # Collection mint address
+    is_compressed = Column(Boolean, default=False)  # Compressed NFT (cNFT)
+    acquired_at = Column(DateTime, default=datetime.utcnow)
+    acquisition_type = Column(Text)  # mint, purchase, reward, transfer
+    event_id = Column(BigInteger, ForeignKey("events.event_id", ondelete="SET NULL"))  # If ticket NFT
+    
+    __table_args__ = (
+        CheckConstraint("nft_type IN ('badge', 'ticket', 'reward', 'collectible', 'membership')"),
+        CheckConstraint("acquisition_type IN ('mint', 'purchase', 'reward', 'transfer', 'airdrop')"),
+        Index("idx_user_nfts_user", "user_id"),
+        Index("idx_user_nfts_wallet", "wallet_id"),
+        Index("idx_user_nfts_type", "nft_type"),
+        Index("idx_user_nfts_collection", "collection_address"),
+    )
+
+
+# ============================================
+# BLOGS / ARTICLES
+# ============================================
+class Blog(Base):
+    """
+    Blog posts and articles for content engagement tracking.
+    """
+    __tablename__ = "blogs"
+    
+    blog_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    author_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    title = Column(Text, nullable=False)
+    slug = Column(Text, unique=True)
+    content = Column(Text)
+    summary = Column(Text)
+    category = Column(Text)
+    tags = Column(ARRAY(Text))
+    cover_image_url = Column(Text)
+    status = Column(Text, default="draft")
+    language = Column(Text, default="en")
+    read_time_minutes = Column(Integer)
+    view_count = Column(Integer, default=0)
+    like_count = Column(Integer, default=0)
+    comment_count = Column(Integer, default=0)
+    is_featured = Column(Boolean, default=False)
+    published_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'published', 'archived', 'deleted')"),
+        Index("idx_blogs_author", "author_id"),
+        Index("idx_blogs_status", "status"),
+        Index("idx_blogs_category", "category"),
+    )
+
+
+# ============================================
+# BLOG INTERACTIONS
+# ============================================
+class BlogInteraction(Base):
+    """
+    User interactions with blog posts for ML training.
+    """
+    __tablename__ = "blog_interactions"
+    
+    interaction_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    blog_id = Column(BigInteger, ForeignKey("blogs.blog_id", ondelete="CASCADE"), nullable=False)
+    interaction_type = Column(Text, nullable=False)  # view, like, comment, share, bookmark
+    read_percentage = Column(Integer)  # 0-100 how much was read
+    time_spent_seconds = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        CheckConstraint("interaction_type IN ('view', 'like', 'comment', 'share', 'bookmark', 'unlike')"),
+        Index("idx_blog_interactions_user", "user_id"),
+        Index("idx_blog_interactions_blog", "blog_id"),
+        Index("idx_blog_interactions_type", "interaction_type"),
+    )
+
+
+# ============================================
+# AD INTERACTIONS (for ML training)
+# ============================================
+class AdInteraction(Base):
+    """
+    Detailed ad interaction tracking for ML/recommendation training.
+    """
+    __tablename__ = "ad_interactions"
+    
+    interaction_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    ad_id = Column(BigInteger, ForeignKey("ads.ad_id", ondelete="CASCADE"), nullable=False)
+    interaction_type = Column(Text, nullable=False)  # impression, click, conversion, dismiss
+    placement = Column(Text)  # feed, sidebar, banner, interstitial
+    device_type = Column(Text)  # mobile, desktop, tablet
+    session_id = Column(Text)
+    dwell_time_ms = Column(Integer)  # Time spent viewing
+    converted = Column(Boolean, default=False)
+    conversion_value = Column(Numeric(12, 2))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        CheckConstraint("interaction_type IN ('impression', 'click', 'conversion', 'dismiss', 'skip')"),
+        Index("idx_ad_interactions_user", "user_id"),
+        Index("idx_ad_interactions_ad", "ad_id"),
+        Index("idx_ad_interactions_type", "interaction_type"),
+    )
+
+
+# ============================================
+# ML MODEL TRAINING LOGS (read-only for AI/ML)
+# ============================================
+class MLTrainingLog(Base):
+    """
+    Logs for ML model training runs - write-only for backend, read-only for AI/ML.
+    AI/ML does not touch migrations, schemas, logs, or DB governance.
+    """
+    __tablename__ = "ml_training_logs"
+    
+    log_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    model_name = Column(Text, nullable=False)  # tfrs_recommender, prophet_attendance, etc.
+    model_version = Column(Text)
+    training_started = Column(DateTime, nullable=False)
+    training_completed = Column(DateTime)
+    status = Column(Text, default="running")  # running, completed, failed
+    metrics = Column(JSONB)  # accuracy, loss, etc.
+    hyperparameters = Column(JSONB)
+    dataset_size = Column(Integer)
+    training_duration_seconds = Column(Integer)
+    error_message = Column(Text)
+    created_by = Column(Text)  # system, manual, scheduled
+    
+    __table_args__ = (
+        CheckConstraint("status IN ('running', 'completed', 'failed', 'cancelled')"),
+        Index("idx_ml_training_logs_model", "model_name"),
+        Index("idx_ml_training_logs_status", "status"),
+    )
+
+
+# ============================================
+# MATCHING LOGS (async logging per requirements)
+# ============================================
+class MatchingLog(Base):
+    """
+    Logs for matching pipeline runs - async only, never blocks response.
+    """
+    __tablename__ = "matching_logs"
+    
+    log_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    event_id = Column(BigInteger, ForeignKey("events.event_id", ondelete="CASCADE"), nullable=False)
+    relevance_score = Column(Numeric(5, 4))
+    trust_score = Column(Numeric(5, 4))
+    engagement_score = Column(Numeric(5, 4))
+    freshness_score = Column(Numeric(5, 4))
+    business_score = Column(Numeric(5, 4))
+    final_score = Column(Numeric(5, 4))
+    rank_position = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index("idx_matching_logs_user", "user_id"),
+        Index("idx_matching_logs_event", "event_id"),
+        Index("idx_matching_logs_created", "created_at"),
+    )
+
+
+# ============================================
+# FEEDBACK ANALYSIS (ML Results Storage)
+# ============================================
+class FeedbackAnalysis(Base):
+    """
+    Stores ML analysis results for user feedback.
+    
+    Multi-label classification + Sentiment + Keywords.
+    Raw feedback text remains in original source table.
+    """
+    __tablename__ = "feedback_analysis"
+    
+    analysis_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    feedback_id = Column(Text, nullable=False)  # Reference to original feedback
+    feedback_source = Column(Text, nullable=False)  # 'event_rating', 'support_email', 'app_feedback', etc.
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="SET NULL"))
+    
+    # Sentiment Analysis
+    sentiment = Column(Text, nullable=False)  # positive | neutral | negative | mixed
+    sentiment_score = Column(Numeric(5, 4))  # 0.0 to 1.0
+    
+    # Multi-label Theme Classification (JSONB)
+    themes = Column(JSONB, default=list)  # ["UX", "Bugs/Technical", "Feature requests", etc.]
+    theme_scores = Column(JSONB, default=dict)  # {"UX": 0.85, "Bugs/Technical": 0.72}
+    
+    # Keyword Extraction (JSONB)
+    keywords = Column(JSONB, default=list)  # ["login", "slow", "crash"]
+    keyword_scores = Column(JSONB, default=dict)  # {"login": 0.92, "slow": 0.78}
+    
+    # Overall confidence
+    confidence_score = Column(Numeric(5, 4))
+    
+    # Model metadata
+    model_version = Column(Text, default="v1.0")
+    processing_time_ms = Column(Numeric(10, 2))
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        CheckConstraint("sentiment IN ('positive', 'neutral', 'negative', 'mixed')"),
+        Index("idx_feedback_analysis_source", "feedback_source"),
+        Index("idx_feedback_analysis_sentiment", "sentiment"),
+        Index("idx_feedback_analysis_created", "created_at"),
+        Index("idx_feedback_analysis_user", "user_id"),
+    )
+
+
+# ============================================
+# USER RETENTION RISK (Churn Prediction)
+# ============================================
+class UserRetentionRisk(Base):
+    """
+    Stores churn/retention risk predictions for users.
+    
+    Model predicts risk only; recommended actions are rule-based
+    and can be adjusted later by business logic.
+    """
+    __tablename__ = "user_retention_risk"
+    
+    prediction_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    
+    # Churn Prediction
+    churn_probability = Column(Numeric(5, 4), nullable=False)  # 0.0 to 1.0
+    risk_band = Column(Text, nullable=False)  # low | medium | high
+    
+    # Rule-based recommended action
+    recommended_action = Column(Text)  # 'send_winback_email', 'offer_discount', 'no_action', etc.
+    action_priority = Column(Integer, default=0)  # 0=low, 1=medium, 2=high
+    
+    # Feature values used for prediction (for explainability)
+    features = Column(JSONB, default=dict)
+    # {
+    #   "days_since_last_login": 15,
+    #   "days_since_last_event": 30,
+    #   "events_attended_30d": 2,
+    #   "events_attended_60d": 5,
+    #   "events_attended_90d": 8,
+    #   "messages_sent_30d": 3,
+    #   "blog_interactions": 12,
+    #   "event_interactions": 8,
+    #   "notification_open_ratio": 0.65,
+    #   "reward_tier": "silver",
+    #   "has_purchase": true
+    # }
+    
+    # Feature importance (from model)
+    feature_importance = Column(JSONB, default=dict)
+    
+    # Model metadata
+    model_name = Column(Text, default="logistic_regression")
+    model_version = Column(Text, default="v1.0")
+    
+    # Validity period
+    prediction_date = Column(Date, default=date.today)
+    valid_until = Column(Date)  # Predictions expire after N days
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        CheckConstraint("risk_band IN ('low', 'medium', 'high')"),
+        CheckConstraint("churn_probability >= 0 AND churn_probability <= 1"),
+        Index("idx_retention_risk_user", "user_id"),
+        Index("idx_retention_risk_band", "risk_band"),
+        Index("idx_retention_risk_date", "prediction_date"),
+        UniqueConstraint("user_id", "prediction_date", name="uq_user_daily_prediction"),
+    )
+

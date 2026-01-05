@@ -338,6 +338,70 @@ INSERT INTO host_rating_aggregates (host_id, overall_score, overall_score_5, rev
 (5, 87.00, 4.35, 11, 4.45, 4.55, 4.35, 4.45, 4.25, 0.9200, 0.8900, 0.2800, '[]', '2026-01-05 00:00:00');
 
 -- =============================================================================
+-- 11. PRICING HISTORY - for sklearn regression training
+-- Schema: event_id, price, turnout, host_score, city, category, capacity, event_date, revenue
+-- =============================================================================
+INSERT INTO pricing_history (event_id, price, turnout, host_score, city, category, capacity, event_date, revenue) VALUES
+(1, 25.00, 45, 4.5, 'London', 'outdoor', 50, '2025-06-20', 1125.00),
+(2, 35.00, 28, 4.2, 'New York', 'workshop', 30, '2025-07-15', 980.00),
+(3, 15.00, 80, 4.8, 'Paris', 'social', 100, '2025-08-10', 1200.00),
+(4, 50.00, 20, 4.0, 'Tokyo', 'fitness', 25, '2025-05-25', 1000.00),
+(5, 30.00, 35, 4.3, 'Sydney', 'outdoor', 40, '2025-09-05', 1050.00),
+(1, 28.00, 48, 4.5, 'London', 'outdoor', 50, '2025-07-20', 1344.00),
+(2, 32.00, 30, 4.2, 'New York', 'workshop', 30, '2025-08-15', 960.00),
+(3, 18.00, 75, 4.8, 'Paris', 'social', 100, '2025-09-10', 1350.00),
+(4, 45.00, 22, 4.0, 'Tokyo', 'fitness', 25, '2025-06-25', 990.00),
+(5, 35.00, 32, 4.3, 'Sydney', 'outdoor', 40, '2025-10-05', 1120.00),
+(1, 30.00, 42, 4.5, 'London', 'outdoor', 50, '2025-08-20', 1260.00),
+(2, 38.00, 26, 4.2, 'New York', 'workshop', 30, '2025-09-15', 988.00),
+(3, 20.00, 70, 4.8, 'Paris', 'social', 100, '2025-10-10', 1400.00),
+(4, 55.00, 18, 4.0, 'Tokyo', 'fitness', 25, '2025-07-25', 990.00),
+(5, 32.00, 38, 4.3, 'Sydney', 'outdoor', 40, '2025-11-05', 1216.00);
+
+-- =============================================================================
+-- 12. KNOWLEDGE DOCUMENTS - for chatbot RAG
+-- Schema: id (UUID), title, content, category, language, is_active, created_at
+-- =============================================================================
+INSERT INTO knowledge_documents (id, title, content, category, language, is_active, created_at) VALUES
+('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'How to Create an Event', 'To create an event, navigate to the Events page and click "Create New Event". Fill in the event details including title, description, date, location, and capacity. You can set ticket prices and add images to make your event more attractive.', 'faq', 'en', true, '2025-01-01 00:00:00'),
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12', 'Booking and Payments', 'To book an event, click the "Join Event" button on any event page. You will be directed to a secure payment page. We accept all major credit cards. Your booking is confirmed once payment is processed.', 'faq', 'en', true, '2025-01-01 00:00:00'),
+('c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13', 'Cancellation Policy', 'Cancellations made more than 48 hours before the event receive a full refund. Cancellations within 48 hours may receive a partial refund at the host discretion. No-shows are not eligible for refunds.', 'policy', 'en', true, '2025-01-01 00:00:00'),
+('d0eebc99-9c0b-4ef8-bb6d-6bb9bd380a14', 'Host Guidelines', 'As a host, you are responsible for event safety and communication. Respond to attendee questions within 24 hours. Provide accurate event descriptions and update attendees of any changes promptly.', 'policy', 'en', true, '2025-01-01 00:00:00'),
+('e0eebc99-9c0b-4ef8-bb6d-6bb9bd380a15', 'Getting Started Guide', 'Welcome to Kumele! Start by creating your profile and selecting your interests. Browse events in your area or create your own. Connect with like-minded people and build your community.', 'help', 'en', true, '2025-01-01 00:00:00');
+
+-- =============================================================================
+-- 13. INTEREST TRANSLATIONS - multilingual taxonomy labels
+-- Schema: interest_id (FK), language_code, label, description
+-- =============================================================================
+INSERT INTO interest_translations (interest_id, language_code, label, description) VALUES
+('outdoor', 'en', 'Outdoor Activities', 'Activities in nature and outdoors'),
+('outdoor', 'fr', 'Activités de plein air', 'Activités dans la nature'),
+('outdoor', 'ar', 'أنشطة خارجية', 'أنشطة في الهواء الطلق'),
+('fitness', 'en', 'Fitness & Sports', 'Physical activities and sports'),
+('fitness', 'fr', 'Fitness et Sports', 'Activités physiques et sports'),
+('fitness', 'ar', 'اللياقة والرياضة', 'الأنشطة البدنية والرياضية'),
+('social', 'en', 'Social Events', 'Meetups and social gatherings'),
+('social', 'fr', 'Événements sociaux', 'Rencontres et rassemblements'),
+('social', 'ar', 'فعاليات اجتماعية', 'لقاءات وتجمعات اجتماعية'),
+('education', 'en', 'Education & Learning', 'Workshops and learning events'),
+('education', 'fr', 'Éducation et apprentissage', 'Ateliers et événements éducatifs'),
+('education', 'ar', 'التعليم والتعلم', 'ورش عمل وفعاليات تعليمية');
+
+-- =============================================================================
+-- 14. INTEREST METADATA - icons and display info
+-- Schema: interest_id (FK), icon_key, color_token, display_order
+-- =============================================================================
+INSERT INTO interest_metadata (interest_id, icon_key, color_token, display_order) VALUES
+('outdoor', '🏔️', 'green', 1),
+('fitness', '💪', 'orange', 2),
+('social', '🎉', 'purple', 3),
+('education', '📚', 'blue', 4),
+('hiking', '🥾', 'green', 10),
+('yoga', '🧘', 'teal', 20),
+('cooking', '👨‍🍳', 'red', 30),
+('photography', '📷', 'gray', 40);
+
+-- =============================================================================
 -- DONE! Verify data loaded
 -- =============================================================================
 SELECT 'Data Loading Complete!' AS message;
@@ -350,4 +414,8 @@ UNION ALL SELECT 'reward_coupons', COUNT(*) FROM reward_coupons
 UNION ALL SELECT 'timeseries_daily', COUNT(*) FROM timeseries_daily
 UNION ALL SELECT 'interest_taxonomy', COUNT(*) FROM interest_taxonomy
 UNION ALL SELECT 'ui_strings', COUNT(*) FROM ui_strings
-UNION ALL SELECT 'host_rating_aggregates', COUNT(*) FROM host_rating_aggregates;
+UNION ALL SELECT 'host_rating_aggregates', COUNT(*) FROM host_rating_aggregates
+UNION ALL SELECT 'pricing_history', COUNT(*) FROM pricing_history
+UNION ALL SELECT 'knowledge_documents', COUNT(*) FROM knowledge_documents
+UNION ALL SELECT 'interest_translations', COUNT(*) FROM interest_translations
+UNION ALL SELECT 'interest_metadata', COUNT(*) FROM interest_metadata;

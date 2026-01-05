@@ -3,51 +3,72 @@ Moderation Service for Content Moderation (Text + Image + Video).
 
 Handles toxicity, hate speech, NSFW detection.
 
-Moderation Pipeline (per requirements Section 3G):
-==============================================================================
-1. Text Moderation:
-   - HuggingFace toxic-bert model for toxicity scoring
-   - Hate speech detection using specialized model
-   - Profanity filter with regex patterns
-   - Multi-language support (translates to English first)
+============================================================================
+UNIFIED MODERATION SERVICE SPECIFICATION (MVP)
+============================================================================
 
-2. Image Moderation:
-   - NSFW detection using clip-based classifier
-   - Face detection for privacy concerns
-   - Violence/gore detection
-   - Logo/watermark detection
+API Endpoints:
+- POST /moderation: Submit content for moderation
+- GET /moderation/{content_id}: Get moderation status
 
-3. Video Moderation (future):
-   - Frame extraction at configurable intervals
-   - Run image moderation on frames
-   - Audio transcription + text moderation
+Content Types (MVP):
+1. TEXT (Moderate):
+   - Blogs, comments, event descriptions
+   - Ad titles, descriptions, CTAs
+   - Uses Hugging Face NLP moderation (toxicity, hate, spam)
 
-Scoring System:
-==============================================================================
-- 0.0 - 0.3: Safe (auto-approve)
-- 0.3 - 0.7: Review (manual moderation queue)
-- 0.7 - 1.0: Reject (auto-reject, flag for review)
+2. IMAGE (Moderate):
+   - Event banners
+   - Profile images
+   - Static ad creatives
+   - Video thumbnails
+   - Uses Hugging Face vision safety models
 
-Thresholds (configurable via settings):
-- MODERATION_AUTO_APPROVE: 0.3
-- MODERATION_AUTO_REJECT: 0.7
+3. VIDEO ADS (Limited MVP Scope):
+   - Moderate thumbnail/keyframe image ✓
+   - Moderate associated text (title/description/CTA) ✓
+   - ❌ No full video frame analysis
+   - ❌ No audio/speech moderation
+   - ❌ No live or long-form video moderation
 
-Job Status Flow:
-==============================================================================
-pending → processing → completed/failed
-                    ↘ needs_review (if score in gray zone)
+Decision Thresholds (MVP Defaults):
+TEXT:
+  - Toxicity > 0.60 → reject
+  - Hate > 0.30 → reject
+  - Spam > 0.70 → reject
 
-Async Processing:
-- Celery tasks for heavy moderation jobs
-- Redis queue for job management
-- Webhook callback on completion
+IMAGE / THUMBNAIL:
+  - Nudity > 0.60 → reject
+  - Violence > 0.50 → reject
+  - Hate symbols > 0.40 → reject
 
-Key Endpoints:
-==============================================================================
-- POST /moderation/text: Moderate text content
-- POST /moderation/image: Moderate image content
-- POST /moderation/batch: Batch moderation job
-- GET /moderation/jobs/{job_id}: Check job status
+Outcomes:
+  - approve: Content is safe
+  - reject: Content violates policy
+  - needs_review: Logged for manual review (gray zone)
+
+Database:
+  - moderation_jobs table supports text, image, video
+  - Stores decision, labels (JSONB), timestamps
+
+Explicitly Out of Scope (MVP):
+  - Full video frame analysis
+  - Audio moderation
+  - Live moderation
+  - Human review UI
+  - Appeals workflow
+  - ML-based decision engine (heuristics only for MVP)
+
+Workflow:
+1. Frontend submits content via POST /moderation
+2. Routing by type:
+   - text → NLP worker
+   - image → vision worker
+   - video → thumbnail image + text moderation
+3. Threshold-based decision engine
+4. Persist result
+5. Fetch status via GET endpoint
+============================================================================
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,6 +88,7 @@ class ModerationService:
     """Service for unified content moderation."""
     
     # Text moderation thresholds (lower = more sensitive)
+    # Per spec: Toxicity > 0.60 → reject, Hate > 0.30 → reject, Spam > 0.70 → reject
     TEXT_THRESHOLDS = {
         "toxicity": settings.TOXICITY_THRESHOLD,      # 0.60
         "hate": settings.HATE_THRESHOLD,              # 0.30
@@ -77,10 +99,11 @@ class ModerationService:
     }
     
     # Image moderation thresholds
+    # Per spec: Nudity > 0.60 → reject, Violence > 0.50 → reject, Hate symbols > 0.40 → reject
     IMAGE_THRESHOLDS = {
-        "nudity": settings.NUDITY_THRESHOLD,
-        "violence": settings.VIOLENCE_THRESHOLD,
-        "hate_symbols": 0.40,
+        "nudity": settings.NUDITY_THRESHOLD,          # 0.60
+        "violence": settings.VIOLENCE_THRESHOLD,      # 0.50
+        "hate_symbols": settings.HATE_SYMBOLS_THRESHOLD,  # 0.40
     }
     
     # =========================================================================
@@ -619,12 +642,20 @@ class ModerationService:
         text: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Moderate video content by checking thumbnail and associated text.
-        For MVP: Only moderate thumbnail + text, not full video.
+        Moderate video content (MVP scope).
+        
+        MVP SCOPE:
+        ✓ Moderate thumbnail/keyframe image
+        ✓ Moderate associated text (title/description/CTA)
+        ❌ No full video frame analysis
+        ❌ No audio/speech moderation
+        ❌ No live or long-form video moderation
+        
+        For video ads: moderate thumbnail + text at upload only.
         """
         all_labels = []
         
-        # Moderate thumbnail
+        # Moderate thumbnail image (MVP: only thumbnail, not full video)
         image_result = await ModerationService.moderate_image(
             video_url, 
             thumbnail_url

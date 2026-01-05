@@ -48,6 +48,9 @@ Key Endpoints:
 - POST /nlp/topics: Classify text into topics
 - GET /nlp/trends: Get trending topics (daily/weekly)
 - POST /nlp/batch: Batch NLP processing job
+
+Redis Streams (MVP):
+- nlp_events stream with XADD + MAXLEN (producers only)
 """
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,9 +68,58 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Optional Redis for streams
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+    logger.warning("Redis not available - nlp_events stream disabled")
+
 
 class NLPService:
     """Service for NLP operations on user-generated content."""
+    
+    # Redis stream for NLP events (MVP: producer only)
+    _redis_client = None
+    NLP_EVENTS_STREAM = "nlp_events"
+    STREAM_MAXLEN = 10000
+    
+    @classmethod
+    def get_redis_client(cls):
+        """Get or create Redis client for streams."""
+        if not REDIS_AVAILABLE:
+            return None
+        if cls._redis_client is None:
+            try:
+                redis_url = getattr(settings, 'REDIS_URL', 'redis://localhost:6379/0')
+                cls._redis_client = redis.from_url(redis_url)
+                cls._redis_client.ping()
+                logger.info("Redis connected for nlp_events stream")
+            except Exception as e:
+                logger.warning(f"Redis connection failed: {e}")
+                cls._redis_client = None
+        return cls._redis_client
+    
+    @classmethod
+    def publish_nlp_event(cls, event_type: str, data: Dict[str, Any]):
+        """Publish event to nlp_events Redis stream (producer only)."""
+        client = cls.get_redis_client()
+        if client:
+            try:
+                event_data = {
+                    "type": event_type,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    **{k: str(v) for k, v in data.items()}
+                }
+                # XADD with MAXLEN (as per spec: producers only)
+                client.xadd(
+                    cls.NLP_EVENTS_STREAM,
+                    event_data,
+                    maxlen=cls.STREAM_MAXLEN
+                )
+            except Exception as e:
+                logger.warning(f"Failed to publish NLP event: {e}")
     
     # Common stop words to filter out
     STOP_WORDS = {
@@ -167,18 +219,28 @@ class NLPService:
             total = positive_count + negative_count
             
             if total == 0:
-                return {"sentiment": "neutral", "score": 0.5, "confidence": 0.6}
+                result = {"sentiment": "neutral", "score": 0.5, "confidence": 0.6}
+                NLPService.publish_nlp_event("sentiment", {"sentiment": "neutral", "text_length": len(text)})
+                return result
             
             positive_ratio = positive_count / total
             
             if positive_ratio > 0.6:
                 confidence = min(0.5 + (positive_ratio * 0.5), 0.99)
-                return {"sentiment": "positive", "score": round(positive_ratio, 2), "confidence": round(confidence, 2)}
+                result = {"sentiment": "positive", "score": round(positive_ratio, 2), "confidence": round(confidence, 2)}
             elif positive_ratio < 0.4:
                 confidence = min(0.5 + ((1 - positive_ratio) * 0.5), 0.99)
-                return {"sentiment": "negative", "score": round(1 - positive_ratio, 2), "confidence": round(confidence, 2)}
+                result = {"sentiment": "negative", "score": round(1 - positive_ratio, 2), "confidence": round(confidence, 2)}
             else:
-                return {"sentiment": "neutral", "score": 0.5, "confidence": 0.65}
+                result = {"sentiment": "neutral", "score": 0.5, "confidence": 0.65}
+            
+            # Publish to Redis stream
+            NLPService.publish_nlp_event("sentiment", {
+                "sentiment": result["sentiment"],
+                "text_length": len(text)
+            })
+            
+            return result
                 
         except Exception as e:
             logger.error(f"Sentiment analysis error: {e}")
@@ -525,3 +587,259 @@ class NLPService:
                 db.add(new_trend)
         
         await db.flush()
+
+    # =========================================================================
+    # TEXT SUMMARIZATION
+    # =========================================================================
+    
+    @staticmethod
+    async def summarize_text(
+        text: str,
+        max_length: int = 150,
+        min_length: int = 30,
+        style: str = "abstractive"
+    ) -> Dict[str, Any]:
+        """
+        Summarize text using extractive or abstractive methods.
+        
+        Methods:
+        - extractive: Select most important sentences (faster, reliable)
+        - abstractive: Generate new summary using LLM (via TGI)
+        
+        Args:
+            text: Input text to summarize
+            max_length: Maximum summary length (words)
+            min_length: Minimum summary length (words)
+            style: "extractive" or "abstractive"
+        
+        Returns:
+            Summary with metadata
+        """
+        if not text or len(text.strip()) < 50:
+            return {
+                "summary": text.strip() if text else "",
+                "method": "passthrough",
+                "original_length": len(text) if text else 0,
+                "summary_length": len(text.strip()) if text else 0,
+                "compression_ratio": 1.0
+            }
+        
+        original_words = len(text.split())
+        
+        if style == "extractive":
+            summary = await NLPService._extractive_summarize(text, max_length)
+            method = "extractive"
+        else:
+            summary = await NLPService._abstractive_summarize(text, max_length, min_length)
+            method = "abstractive" if summary else "extractive_fallback"
+            
+            # Fallback to extractive if abstractive fails
+            if not summary:
+                summary = await NLPService._extractive_summarize(text, max_length)
+        
+        summary_words = len(summary.split())
+        
+        return {
+            "summary": summary,
+            "method": method,
+            "original_length": original_words,
+            "summary_length": summary_words,
+            "compression_ratio": round(summary_words / max(1, original_words), 3)
+        }
+    
+    @staticmethod
+    async def _extractive_summarize(text: str, max_length: int = 150) -> str:
+        """
+        Extractive summarization using sentence scoring.
+        
+        Scoring based on:
+        - Position (first sentences score higher)
+        - Keyword density (sentences with important words)
+        - Length (prefer medium-length sentences)
+        """
+        # Split into sentences
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        
+        if len(sentences) <= 2:
+            return text.strip()
+        
+        # Get keywords from full text
+        keywords = await NLPService.extract_keywords(text, top_k=15)
+        keyword_set = {kw["keyword"].lower() for kw in keywords.get("keywords", [])}
+        
+        # Score each sentence
+        scored_sentences = []
+        
+        for idx, sentence in enumerate(sentences):
+            sentence = sentence.strip()
+            if len(sentence) < 10:
+                continue
+            
+            words = sentence.lower().split()
+            word_count = len(words)
+            
+            # Position score (first sentences are usually important)
+            position_score = 1.0 / (idx + 1) if idx < 5 else 0.1
+            
+            # Keyword density score
+            keyword_matches = sum(1 for w in words if w in keyword_set)
+            keyword_score = keyword_matches / max(1, word_count)
+            
+            # Length score (prefer medium length, 10-30 words)
+            if word_count < 5:
+                length_score = 0.3
+            elif word_count <= 30:
+                length_score = 1.0
+            else:
+                length_score = 0.5
+            
+            # Combined score
+            total_score = (
+                position_score * 0.3 +
+                keyword_score * 0.5 +
+                length_score * 0.2
+            )
+            
+            scored_sentences.append((sentence, total_score, idx))
+        
+        # Sort by score and select top sentences
+        scored_sentences.sort(key=lambda x: x[1], reverse=True)
+        
+        # Select sentences until max_length reached
+        selected = []
+        current_words = 0
+        
+        for sentence, score, idx in scored_sentences:
+            words = len(sentence.split())
+            if current_words + words <= max_length:
+                selected.append((sentence, idx))
+                current_words += words
+            
+            if current_words >= max_length * 0.8:
+                break
+        
+        # Re-order by original position for coherence
+        selected.sort(key=lambda x: x[1])
+        
+        summary = " ".join(s[0] for s in selected)
+        
+        return summary
+    
+    @staticmethod
+    async def _abstractive_summarize(
+        text: str,
+        max_length: int = 150,
+        min_length: int = 30
+    ) -> Optional[str]:
+        """
+        Abstractive summarization using LLM (TGI/Mistral).
+        
+        Falls back to None if LLM unavailable.
+        """
+        prompt = f"""Summarize the following text in {min_length}-{max_length} words.
+Keep the key information and main points. Use clear, concise language.
+
+Text to summarize:
+{text[:2000]}
+
+Summary:"""
+
+        try:
+            # Try TGI first
+            tgi_url = f"{settings.TGI_ENDPOINT or 'http://localhost:8080'}/generate"
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    tgi_url,
+                    json={
+                        "inputs": prompt,
+                        "parameters": {
+                            "max_new_tokens": max_length * 5,
+                            "temperature": 0.3,
+                            "do_sample": False
+                        }
+                    },
+                    timeout=30.0
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    summary = result.get("generated_text", "").strip()
+                    
+                    # Clean up common prefixes
+                    for prefix in ["Summary:", "Here is the summary:", "Here's the summary:"]:
+                        if summary.lower().startswith(prefix.lower()):
+                            summary = summary[len(prefix):].strip()
+                    
+                    if summary and len(summary) > 20:
+                        return summary
+            
+        except Exception as e:
+            logger.warning(f"TGI summarization failed: {e}")
+        
+        # Try Mistral API fallback
+        try:
+            mistral_api_key = getattr(settings, 'MISTRAL_API_KEY', None)
+            if mistral_api_key:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "https://api.mistral.ai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {mistral_api_key}"},
+                        json={
+                            "model": "mistral-small-latest",
+                            "messages": [
+                                {"role": "user", "content": prompt}
+                            ],
+                            "max_tokens": max_length * 5,
+                            "temperature": 0.3
+                        },
+                        timeout=30.0
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        summary = result["choices"][0]["message"]["content"].strip()
+                        
+                        # Clean up
+                        for prefix in ["Summary:", "Here is the summary:", "Here's the summary:"]:
+                            if summary.lower().startswith(prefix.lower()):
+                                summary = summary[len(prefix):].strip()
+                        
+                        if summary and len(summary) > 20:
+                            return summary
+                            
+        except Exception as e:
+            logger.warning(f"Mistral summarization failed: {e}")
+        
+        return None
+    
+    @staticmethod
+    async def batch_summarize(
+        texts: List[str],
+        max_length: int = 150,
+        style: str = "extractive"
+    ) -> List[Dict[str, Any]]:
+        """
+        Batch summarize multiple texts.
+        
+        Uses extractive by default for speed.
+        """
+        results = []
+        
+        for text in texts:
+            try:
+                result = await NLPService.summarize_text(
+                    text, 
+                    max_length=max_length, 
+                    style=style
+                )
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Batch summarize error: {e}")
+                results.append({
+                    "summary": "",
+                    "method": "error",
+                    "error": str(e)
+                })
+        
+        return results
