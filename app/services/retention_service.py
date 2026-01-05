@@ -50,7 +50,7 @@ import os
 import numpy as np
 
 from app.models.database_models import (
-    UserRetentionRisk, User, Event, EventAttendee,
+    UserRetentionRisk, User, Event, EventAttendance,
     Message, Notification, UserReward
 )
 from app.config import settings
@@ -223,9 +223,9 @@ class RetentionRiskService:
         
         # 2. days_since_last_event
         last_event_query = select(func.max(Event.event_date)).join(
-            EventAttendee, Event.event_id == EventAttendee.event_id
+            EventAttendance, Event.event_id == EventAttendance.event_id
         ).where(
-            EventAttendee.user_id == user_id,
+            EventAttendance.user_id == user_id,
             Event.event_date < now
         )
         
@@ -242,9 +242,9 @@ class RetentionRiskService:
         # 3. events_attended (30d, 60d, 90d)
         for days, key in [(30, "events_attended_30d"), (60, "events_attended_60d"), (90, "events_attended_90d")]:
             cutoff = now - timedelta(days=days)
-            events_query = select(func.count(EventAttendee.event_id)).where(
-                EventAttendee.user_id == user_id,
-                EventAttendee.registered_at >= cutoff
+            events_query = select(func.count(EventAttendance.event_id)).where(
+                EventAttendance.user_id == user_id,
+                EventAttendance.created_at >= cutoff
             )
             try:
                 result = await db.execute(events_query)
@@ -303,11 +303,11 @@ class RetentionRiskService:
         """Get event interactions count (views, RSVPs, comments)."""
         total = 0
         
-        # Count event attendee registrations
+        # Count event attendance registrations
         try:
-            query = select(func.count(EventAttendee.event_id)).where(
-                EventAttendee.user_id == user_id,
-                EventAttendee.registered_at >= cutoff
+            query = select(func.count(EventAttendance.event_id)).where(
+                EventAttendance.user_id == user_id,
+                EventAttendance.created_at >= cutoff
             )
             result = await db.execute(query)
             total += result.scalar() or 0
@@ -375,7 +375,7 @@ class RetentionRiskService:
     async def _has_purchase(user_id: int, db: AsyncSession) -> int:
         """Check if user has made a purchase (returns 0 or 1)."""
         try:
-            # Check EventAttendee with ticket_type or Payment table
+            # Check EventAttendance with ticket_type or Payment table
             from app.models.database_models import Payment
             query = select(func.count(Payment.payment_id)).where(
                 Payment.user_id == user_id,
