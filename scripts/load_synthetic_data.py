@@ -628,65 +628,63 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {activity_count} user activities loaded")
             
-            # 15. Generate pricing history (using only columns that exist in actual table)
+            # 15. Generate pricing history - query actual columns first
             print("Loading pricing history...")
+            pricing_cols = await get_table_columns(session, "pricing_history")
+            print(f"  Pricing history columns: {pricing_cols}")
             pricing_count = 0
-            cities = ["New York", "Los Angeles", "Chicago", "Houston", "Miami", "Seattle", "Denver"]
             for event_id in event_ids:
                 num_records = random.randint(3, 10)
                 for j in range(num_records):
                     price = round(random.uniform(20, 200), 2)
-                    capacity = random.choice([50, 100, 200, 500])
-                    turnout = random.randint(10, capacity)
-                    await session.execute(text("""
-                        INSERT INTO pricing_history (event_id, price, turnout, host_score, city, 
-                                                    capacity, event_date, revenue, created_at)
-                        VALUES (:event_id, :price, :turnout, :host_score, :city, 
-                                :capacity, :event_date, :revenue, :created_at)
-                    """), {
-                        "event_id": event_id,
-                        "price": price,
-                        "turnout": turnout,
-                        "host_score": round(random.uniform(3.0, 5.0), 2),
-                        "city": random.choice(cities),
-                        "capacity": capacity,
-                        "event_date": (now - timedelta(days=j * 7)).date(),
-                        "revenue": round(price * turnout, 2),
-                        "created_at": now - timedelta(days=j * 7),
-                    })
+                    # Build dynamic insert based on available columns
+                    data = {"event_id": event_id, "created_at": now - timedelta(days=j * 7)}
+                    if "price" in pricing_cols:
+                        data["price"] = price
+                    await session.execute(text(f"""
+                        INSERT INTO pricing_history ({', '.join(data.keys())})
+                        VALUES ({', '.join(':' + k for k in data.keys())})
+                    """), data)
                     pricing_count += 1
             await session.commit()
             print(f"  ✓ {pricing_count} pricing history records loaded")
             
-            # 16. Generate messages
+            # 16. Generate messages - query actual columns first
             print("Loading messages...")
+            message_cols = await get_table_columns(session, "messages")
+            print(f"  Messages columns: {message_cols}")
             message_count = 0
             for _ in range(args.users * 5):
                 sender = random.choice(user_ids)
                 receiver = random.choice([u for u in user_ids if u != sender])
-                await session.execute(text("""
-                    INSERT INTO messages (sender_id, receiver_id, content, is_read, created_at)
-                    VALUES (:sender, :receiver, :content, :is_read, :created_at)
-                """), {
-                    "sender": sender,
-                    "receiver": receiver,
-                    "content": random.choice([
+                data = {"created_at": now - timedelta(hours=random.randint(0, 720))}
+                if "sender_id" in message_cols:
+                    data["sender_id"] = sender
+                if "receiver_id" in message_cols:
+                    data["receiver_id"] = receiver
+                if "content" in message_cols:
+                    data["content"] = random.choice([
                         "Hey! Are you going to the event?",
                         "Great meeting you yesterday!",
                         "Thanks for the recommendation!",
                         "See you there!",
                         "What time does it start?",
                         "Can't wait for the event!",
-                    ]),
-                    "is_read": random.random() > 0.4,
-                    "created_at": now - timedelta(hours=random.randint(0, 720)),
-                })
+                    ])
+                if "is_read" in message_cols:
+                    data["is_read"] = random.random() > 0.4
+                await session.execute(text(f"""
+                    INSERT INTO messages ({', '.join(data.keys())})
+                    VALUES ({', '.join(':' + k for k in data.keys())})
+                """), data)
                 message_count += 1
             await session.commit()
             print(f"  ✓ {message_count} messages loaded")
             
-            # 17. Generate notifications
+            # 17. Generate notifications - query actual columns first
             print("Loading notifications...")
+            notif_cols = await get_table_columns(session, "notifications")
+            print(f"  Notifications columns: {notif_cols}")
             notif_count = 0
             notif_types = ["event_reminder", "new_message", "reward_earned", "event_nearby", 
                          "friend_joined", "price_drop", "event_update"]
@@ -695,44 +693,53 @@ async def load_data(args):
                 for _ in range(num_notifs):
                     notif_type = random.choice(notif_types)
                     is_read = random.random() > 0.5
-                    await session.execute(text("""
-                        INSERT INTO notifications (user_id, type, title, body, is_read, opened_at, created_at)
-                        VALUES (:user_id, :type, :title, :body, :is_read, :opened_at, :created_at)
-                    """), {
-                        "user_id": user_id,
-                        "type": notif_type,
-                        "title": f"{notif_type.replace('_', ' ').title()}",
-                        "body": f"You have a new {notif_type.replace('_', ' ')}!",
-                        "is_read": is_read,
-                        "opened_at": now - timedelta(hours=random.randint(0, 48)) if is_read else None,
-                        "created_at": now - timedelta(hours=random.randint(0, 168)),
-                    })
+                    data = {"user_id": user_id, "created_at": now - timedelta(hours=random.randint(0, 168))}
+                    if "type" in notif_cols:
+                        data["type"] = notif_type
+                    if "title" in notif_cols:
+                        data["title"] = f"{notif_type.replace('_', ' ').title()}"
+                    if "body" in notif_cols:
+                        data["body"] = f"You have a new {notif_type.replace('_', ' ')}!"
+                    if "is_read" in notif_cols:
+                        data["is_read"] = is_read
+                    if "opened_at" in notif_cols and is_read:
+                        data["opened_at"] = now - timedelta(hours=random.randint(0, 48))
+                    await session.execute(text(f"""
+                        INSERT INTO notifications ({', '.join(data.keys())})
+                        VALUES ({', '.join(':' + k for k in data.keys())})
+                    """), data)
                     notif_count += 1
             await session.commit()
             print(f"  ✓ {notif_count} notifications loaded")
             
-            # 18. Generate UGC content for moderation
+            # 18. Generate UGC content for moderation - query actual columns first
             print("Loading UGC content...")
+            ugc_cols = await get_table_columns(session, "ugc_content")
+            print(f"  UGC content columns: {ugc_cols}")
             ugc_count = 0
             content_types = ["comment", "review", "bio", "event_description"]
             for _ in range(min(200, args.users)):
-                await session.execute(text("""
-                    INSERT INTO ugc_content (content_type, ref_id, author_id, text, language, created_at)
-                    VALUES (:content_type, :ref_id, :author_id, :text, :language, :created_at)
-                """), {
-                    "content_type": random.choice(content_types),
-                    "ref_id": random.choice(event_ids) if event_ids else 1,
-                    "author_id": random.choice(user_ids),
-                    "text": random.choice([
+                data = {"created_at": now - timedelta(days=random.randint(0, 90))}
+                if "content_type" in ugc_cols:
+                    data["content_type"] = random.choice(content_types)
+                if "ref_id" in ugc_cols:
+                    data["ref_id"] = random.choice(event_ids) if event_ids else 1
+                if "author_id" in ugc_cols:
+                    data["author_id"] = random.choice(user_ids)
+                if "text" in ugc_cols:
+                    data["text"] = random.choice([
                         "This is a great platform!",
                         "Amazing community here.",
                         "Looking forward to more events!",
                         "Best experience ever!",
                         "Highly recommended!",
-                    ]),
-                    "language": random.choice(["en", "es", "fr", "de"]),
-                    "created_at": now - timedelta(days=random.randint(0, 90)),
-                })
+                    ])
+                if "language" in ugc_cols:
+                    data["language"] = random.choice(["en", "es", "fr", "de"])
+                await session.execute(text(f"""
+                    INSERT INTO ugc_content ({', '.join(data.keys())})
+                    VALUES ({', '.join(':' + k for k in data.keys())})
+                """), data)
                 ugc_count += 1
             await session.commit()
             print(f"  ✓ {ugc_count} UGC content items loaded")
