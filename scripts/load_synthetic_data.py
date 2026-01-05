@@ -530,18 +530,20 @@ async def load_data(args):
             # 11. Generate wallets
             print("Loading user wallets...")
             wallet_count = 0
-            wallet_ids = {}
+            wallet_user_map = []  # Store (wallet_id, user_id) for NFT generation
             for user_id in random.sample(user_ids, int(len(user_ids) * 0.4)):
+                wallet_id = str(uuid.uuid4())
                 await session.execute(text("""
-                    INSERT INTO user_wallets (user_id, wallet_address, wallet_type, is_primary)
-                    VALUES (:user_id, :address, :type, :is_primary)
-                    RETURNING wallet_id
+                    INSERT INTO user_wallets (wallet_id, user_id, wallet_address, wallet_type, is_primary)
+                    VALUES (:wallet_id, :user_id, :address, :type, :is_primary)
                 """), {
+                    "wallet_id": wallet_id,
                     "user_id": user_id,
                     "address": generate_wallet_address(),
                     "type": "solana",
                     "is_primary": True,
                 })
+                wallet_user_map.append((wallet_id, user_id))
                 wallet_count += 1
             await session.commit()
             print(f"  ✓ {wallet_count} wallets loaded")
@@ -549,26 +551,24 @@ async def load_data(args):
             # 12. Generate NFTs
             print("Loading user NFTs...")
             nft_count = 0
-            collections = ["Kumele OG", "Event Pass", "Achievement Badge", "Special Edition", "Community Hero"]
-            rarities = ["common", "uncommon", "rare", "epic", "legendary"]
+            nft_types = ["badge", "ticket", "reward", "collectible", "membership"]
+            acquisition_types = ["mint", "purchase", "reward", "transfer", "airdrop"]
             
-            result = await session.execute(text("SELECT wallet_id, user_id FROM user_wallets"))
-            wallets = result.fetchall()
-            
-            for wallet_id, user_id in wallets:
+            for wallet_id, user_id in wallet_user_map:
                 num_nfts = random.randint(1, 5)
                 for j in range(num_nfts):
                     await session.execute(text("""
-                        INSERT INTO user_nfts (user_id, wallet_id, mint_address, name, collection, rarity)
-                        VALUES (:user_id, :wallet_id, :mint, :name, :collection, :rarity)
+                        INSERT INTO user_nfts (nft_id, user_id, wallet_id, mint_address, nft_type, name, acquisition_type)
+                        VALUES (:nft_id, :user_id, :wallet_id, :mint, :nft_type, :name, :acquisition_type)
                         ON CONFLICT (mint_address) DO NOTHING
                     """), {
+                        "nft_id": str(uuid.uuid4()),
                         "user_id": user_id,
                         "wallet_id": wallet_id,
                         "mint": generate_wallet_address(),
-                        "name": f"NFT #{nft_count + 1}",
-                        "collection": random.choice(collections),
-                        "rarity": random.choices(rarities, weights=[40, 30, 20, 8, 2])[0],
+                        "nft_type": random.choice(nft_types),
+                        "name": f"Kumele NFT #{nft_count + 1}",
+                        "acquisition_type": random.choice(acquisition_types),
                     })
                     nft_count += 1
             await session.commit()
@@ -577,43 +577,50 @@ async def load_data(args):
             # 13. Generate reward coupons
             print("Loading reward coupons...")
             coupon_count = 0
+            status_levels = ["bronze", "silver", "gold"]
+            discount_values = {"bronze": 5, "silver": 10, "gold": 20}
             for user_id in random.sample(user_ids, int(len(user_ids) * 0.3)):
                 num_coupons = random.randint(1, 3)
                 for _ in range(num_coupons):
-                    is_used = random.random() < 0.4
+                    is_redeemed = random.random() < 0.4
+                    status_level = random.choice(status_levels)
                     await session.execute(text("""
-                        INSERT INTO reward_coupons (user_id, code, discount_type, discount_value, 
-                                                    is_used, used_at, expires_at)
-                        VALUES (:user_id, :code, :type, :value, :is_used, :used_at, :expires_at)
-                        ON CONFLICT (code) DO NOTHING
+                        INSERT INTO reward_coupons (coupon_id, user_id, status_level, discount_value, 
+                                                    stackable, is_redeemed, redeemed_at, expires_at, issued_at)
+                        VALUES (:coupon_id, :user_id, :status_level, :discount_value, 
+                                :stackable, :is_redeemed, :redeemed_at, :expires_at, :issued_at)
                     """), {
+                        "coupon_id": str(uuid.uuid4()),
                         "user_id": user_id,
-                        "code": f"KUMELE-{generate_hash(str(user_id) + str(random.random()))[:8].upper()}",
-                        "type": random.choice(["percentage", "fixed"]),
-                        "value": random.choice([5, 10, 15, 20, 25, 50]),
-                        "is_used": is_used,
-                        "used_at": now - timedelta(days=random.randint(1, 30)) if is_used else None,
+                        "status_level": status_level,
+                        "discount_value": discount_values[status_level],
+                        "stackable": status_level == "gold",
+                        "is_redeemed": is_redeemed,
+                        "redeemed_at": now - timedelta(days=random.randint(1, 30)) if is_redeemed else None,
                         "expires_at": now + timedelta(days=random.randint(30, 180)),
+                        "issued_at": now - timedelta(days=random.randint(1, 60)),
                     })
                     coupon_count += 1
             await session.commit()
             print(f"  ✓ {coupon_count} coupons loaded")
             
-            # 14. Generate user activities
+            # 14. Generate user activities (constrained to event_created, event_attended)
             print("Loading user activities...")
             activity_count = 0
-            activity_types = ["login", "event_view", "event_rsvp", "blog_read", "profile_update", 
-                            "message_sent", "search", "share", "purchase"]
+            activity_types = ["event_created", "event_attended"]
             for user_id in user_ids:
-                num_activities = random.randint(10, 100)
+                num_activities = random.randint(5, 20)
                 for _ in range(num_activities):
+                    activity_type = random.choice(activity_types)
                     await session.execute(text("""
-                        INSERT INTO user_activities (user_id, activity_type, created_at)
-                        VALUES (:user_id, :type, :created_at)
+                        INSERT INTO user_activities (user_id, activity_type, event_id, activity_date, success)
+                        VALUES (:user_id, :activity_type, :event_id, :activity_date, :success)
                     """), {
                         "user_id": user_id,
-                        "type": random.choice(activity_types),
-                        "created_at": now - timedelta(hours=random.randint(0, 2160)),  # 90 days
+                        "activity_type": activity_type,
+                        "event_id": random.choice(event_ids) if event_ids else None,
+                        "activity_date": now - timedelta(hours=random.randint(0, 2160)),  # 90 days
+                        "success": random.random() > 0.1,  # 90% success rate
                     })
                     activity_count += 1
             await session.commit()
@@ -623,23 +630,29 @@ async def load_data(args):
             print("Loading pricing history...")
             pricing_count = 0
             categories = ["concert", "sports", "meetup", "workshop", "party"]
+            cities = ["New York", "Los Angeles", "Chicago", "Houston", "Miami", "Seattle", "Denver"]
             for event_id in event_ids:
                 num_records = random.randint(3, 10)
                 for j in range(num_records):
-                    original = round(random.uniform(20, 200), 2)
+                    price = round(random.uniform(20, 200), 2)
+                    capacity = random.choice([50, 100, 200, 500])
+                    turnout = random.randint(10, capacity)
                     await session.execute(text("""
-                        INSERT INTO pricing_history (event_id, category, original_price, final_price, 
-                                                    demand_score, capacity, sold, recorded_at)
-                        VALUES (:event_id, :category, :original, :final, :demand, :capacity, :sold, :recorded_at)
+                        INSERT INTO pricing_history (event_id, price, turnout, host_score, city, 
+                                                    category, capacity, event_date, revenue, created_at)
+                        VALUES (:event_id, :price, :turnout, :host_score, :city, 
+                                :category, :capacity, :event_date, :revenue, :created_at)
                     """), {
                         "event_id": event_id,
+                        "price": price,
+                        "turnout": turnout,
+                        "host_score": round(random.uniform(3.0, 5.0), 2),
+                        "city": random.choice(cities),
                         "category": random.choice(categories),
-                        "original": original,
-                        "final": round(original * random.uniform(0.7, 1.3), 2),
-                        "demand": round(random.uniform(0.2, 0.95), 2),
-                        "capacity": random.choice([50, 100, 200, 500]),
-                        "sold": random.randint(10, 450),
-                        "recorded_at": now - timedelta(days=j * 7),
+                        "capacity": capacity,
+                        "event_date": (now - timedelta(days=j * 7)).date(),
+                        "revenue": round(price * turnout, 2),
+                        "created_at": now - timedelta(days=j * 7),
                     })
                     pricing_count += 1
             await session.commit()
@@ -704,19 +717,20 @@ async def load_data(args):
             content_types = ["comment", "review", "bio", "event_description"]
             for _ in range(min(200, args.users)):
                 await session.execute(text("""
-                    INSERT INTO ugc_content (user_id, content_type, content, status, created_at)
-                    VALUES (:user_id, :type, :content, :status, :created_at)
+                    INSERT INTO ugc_content (content_type, ref_id, author_id, text, language, created_at)
+                    VALUES (:content_type, :ref_id, :author_id, :text, :language, :created_at)
                 """), {
-                    "user_id": random.choice(user_ids),
-                    "type": random.choice(content_types),
-                    "content": random.choice([
+                    "content_type": random.choice(content_types),
+                    "ref_id": random.choice(event_ids) if event_ids else 1,
+                    "author_id": random.choice(user_ids),
+                    "text": random.choice([
                         "This is a great platform!",
                         "Amazing community here.",
                         "Looking forward to more events!",
                         "Best experience ever!",
                         "Highly recommended!",
                     ]),
-                    "status": random.choice(["approved", "approved", "approved", "pending", "rejected"]),
+                    "language": random.choice(["en", "es", "fr", "de"]),
                     "created_at": now - timedelta(days=random.randint(0, 90)),
                 })
                 ugc_count += 1
