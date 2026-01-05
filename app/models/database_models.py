@@ -1197,3 +1197,69 @@ class UserRetentionRisk(Base):
         UniqueConstraint("user_id", "prediction_date", name="uq_user_daily_prediction"),
     )
 
+
+# ============================================
+# MESSAGES (for user-to-user messaging)
+# ============================================
+class Message(Base):
+    __tablename__ = "messages"
+    
+    message_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    sender_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    receiver_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    content = Column(Text, nullable=False)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index("idx_messages_sender", "sender_id"),
+        Index("idx_messages_receiver", "receiver_id"),
+        Index("idx_messages_created", "created_at"),
+    )
+
+
+# ============================================
+# NOTIFICATIONS (for push/in-app notifications)
+# ============================================
+class Notification(Base):
+    __tablename__ = "notifications"
+    
+    notification_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    type = Column(Text, nullable=False)  # 'event_reminder', 'new_message', 'reward_earned', etc.
+    title = Column(Text, nullable=False)
+    body = Column(Text)
+    data = Column(JSONB, default=dict)  # Additional payload
+    is_read = Column(Boolean, default=False)
+    opened_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index("idx_notifications_user", "user_id"),
+        Index("idx_notifications_type", "type"),
+        Index("idx_notifications_created", "created_at"),
+    )
+
+
+# ============================================
+# USER REWARDS (earned rewards/coupons)
+# ============================================
+class UserReward(Base):
+    __tablename__ = "user_rewards"
+    
+    reward_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    reward_type = Column(Text, nullable=False)  # 'coupon', 'points', 'badge', 'nft'
+    reward_value = Column(Text)  # Coupon code, points amount, badge name, etc.
+    description = Column(Text)
+    is_redeemed = Column(Boolean, default=False)
+    redeemed_at = Column(DateTime)
+    expires_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index("idx_user_rewards_user", "user_id"),
+        Index("idx_user_rewards_type", "reward_type"),
+        Index("idx_user_rewards_redeemed", "is_redeemed"),
+    )
+
