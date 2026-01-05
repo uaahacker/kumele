@@ -98,33 +98,9 @@ def generate_hash(text: str) -> str:
 
 
 async def create_tables(engine):
-    """Create tables if they don't exist."""
+    """Create additional tables if they don't exist (those not in database_models)."""
     async with engine.begin() as conn:
-        # Interest taxonomy table
-        await conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS interest_taxonomy (
-                interest_id SERIAL PRIMARY KEY,
-                slug TEXT UNIQUE NOT NULL,
-                name TEXT NOT NULL,
-                category TEXT,
-                parent_id INTEGER REFERENCES interest_taxonomy(interest_id),
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-        """))
-        
-        # User hobbies table
-        await conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS user_hobbies (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-                interest_id INTEGER REFERENCES interest_taxonomy(interest_id),
-                preference_score NUMERIC(3, 2) DEFAULT 0.5,
-                created_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(user_id, interest_id)
-            )
-        """))
-        
-        # Blogs table
+        # Blogs table (if not exists)
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS blogs (
                 blog_id SERIAL PRIMARY KEY,
@@ -205,21 +181,6 @@ async def create_tables(engine):
             )
         """))
         
-        # Pricing history
-        await conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS pricing_history (
-                id SERIAL PRIMARY KEY,
-                event_id BIGINT,
-                category TEXT,
-                original_price NUMERIC(10,2),
-                final_price NUMERIC(10,2),
-                demand_score NUMERIC(3,2),
-                capacity INTEGER,
-                sold INTEGER,
-                recorded_at TIMESTAMP DEFAULT NOW()
-            )
-        """))
-        
         print("✓ Additional tables created/verified")
 
 
@@ -244,14 +205,33 @@ async def load_data(args):
             # Create additional tables
             await create_tables(engine)
             
-            # 1. Load interest taxonomy (hobbies)
+            # 1. Load interest taxonomy (hobbies) - uses VARCHAR interest_id
             print("Loading interest taxonomy...")
-            for i, (slug, name, category) in enumerate(HOBBIES, 1):
+            hobby_slugs = []  # Store slugs for later use
+            for slug, name, category in HOBBIES:
                 await session.execute(text("""
-                    INSERT INTO interest_taxonomy (interest_id, slug, name, category)
-                    VALUES (:id, :slug, :name, :category)
-                    ON CONFLICT (slug) DO NOTHING
-                """), {"id": i, "slug": slug, "name": name, "category": category})
+                    INSERT INTO interest_taxonomy (interest_id, parent_id, level, is_active)
+                    VALUES (:interest_id, :parent_id, :level, :is_active)
+                    ON CONFLICT (interest_id) DO NOTHING
+                """), {
+                    "interest_id": slug,  # Use slug as interest_id (VARCHAR)
+                    "parent_id": category,  # Use category as parent
+                    "level": 1,
+                    "is_active": True
+                })
+                hobby_slugs.append(slug)
+                
+                # Also insert translation for English
+                await session.execute(text("""
+                    INSERT INTO interest_translations (interest_id, language_code, label, description)
+                    VALUES (:interest_id, :lang, :label, :description)
+                    ON CONFLICT (interest_id, language_code) DO NOTHING
+                """), {
+                    "interest_id": slug,
+                    "lang": "en",
+                    "label": name,
+                    "description": f"Interest in {name.lower()}"
+                })
             await session.commit()
             print(f"  ✓ {len(HOBBIES)} hobbies loaded")
             
@@ -288,20 +268,20 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {args.users} users loaded")
             
-            # 3. Assign hobbies to users
+            # 3. Assign hobbies to users (uses hobby_id as VARCHAR)
             print("Loading user hobbies...")
             hobby_count = 0
             for user_id in user_ids:
                 num_hobbies = random.randint(2, 6)
-                selected_hobbies = random.sample(range(1, len(HOBBIES) + 1), num_hobbies)
-                for hobby_id in selected_hobbies:
+                selected_hobbies = random.sample(hobby_slugs, num_hobbies)
+                for hobby_slug in selected_hobbies:
                     await session.execute(text("""
-                        INSERT INTO user_hobbies (user_id, interest_id, preference_score)
-                        VALUES (:user_id, :interest_id, :score)
-                        ON CONFLICT (user_id, interest_id) DO NOTHING
+                        INSERT INTO user_hobbies (user_id, hobby_id, preference_score)
+                        VALUES (:user_id, :hobby_id, :score)
+                        ON CONFLICT ON CONSTRAINT uq_user_hobby DO NOTHING
                     """), {
                         "user_id": user_id,
-                        "interest_id": hobby_id,
+                        "hobby_id": hobby_slug,  # VARCHAR hobby_id
                         "score": round(random.uniform(0.3, 1.0), 2)
                     })
                     hobby_count += 1
