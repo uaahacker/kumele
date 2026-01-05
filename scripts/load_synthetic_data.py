@@ -626,10 +626,9 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {activity_count} user activities loaded")
             
-            # 15. Generate pricing history
+            # 15. Generate pricing history (using only columns that exist in actual table)
             print("Loading pricing history...")
             pricing_count = 0
-            categories = ["concert", "sports", "meetup", "workshop", "party"]
             cities = ["New York", "Los Angeles", "Chicago", "Houston", "Miami", "Seattle", "Denver"]
             for event_id in event_ids:
                 num_records = random.randint(3, 10)
@@ -639,16 +638,15 @@ async def load_data(args):
                     turnout = random.randint(10, capacity)
                     await session.execute(text("""
                         INSERT INTO pricing_history (event_id, price, turnout, host_score, city, 
-                                                    category, capacity, event_date, revenue, created_at)
+                                                    capacity, event_date, revenue, created_at)
                         VALUES (:event_id, :price, :turnout, :host_score, :city, 
-                                :category, :capacity, :event_date, :revenue, :created_at)
+                                :capacity, :event_date, :revenue, :created_at)
                     """), {
                         "event_id": event_id,
                         "price": price,
                         "turnout": turnout,
                         "host_score": round(random.uniform(3.0, 5.0), 2),
                         "city": random.choice(cities),
-                        "category": random.choice(categories),
                         "capacity": capacity,
                         "event_date": (now - timedelta(days=j * 7)).date(),
                         "revenue": round(price * turnout, 2),
