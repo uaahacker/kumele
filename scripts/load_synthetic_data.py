@@ -97,36 +97,61 @@ def generate_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+async def get_table_columns(conn, table_name: str) -> set:
+    """Get existing columns for a table."""
+    result = await conn.execute(text("""
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = :table_name
+    """), {"table_name": table_name})
+    return {row[0] for row in result.fetchall()}
+
+
 async def create_tables(engine):
     """Create additional tables and add missing columns to existing tables."""
     async with engine.begin() as conn:
         # Add missing columns to users table (if they don't exist)
-        try:
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reward_tier TEXT DEFAULT 'none'"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_language TEXT DEFAULT 'en'"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS location_lat NUMERIC(10,7)"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS location_lon NUMERIC(10,7)"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS age INTEGER"))
-            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT"))
-            print("✓ Users table columns verified/added")
-        except Exception as e:
-            print(f"  Note: Users columns may already exist: {e}")
+        user_cols = await get_table_columns(conn, "users")
+        print(f"  Existing users columns: {user_cols}")
+        
+        if "reward_tier" not in user_cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN reward_tier TEXT DEFAULT 'none'"))
+        if "preferred_language" not in user_cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN preferred_language TEXT DEFAULT 'en'"))
+        if "name" not in user_cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN name TEXT"))
+        if "location_lat" not in user_cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN location_lat NUMERIC(10,7)"))
+        if "location_lon" not in user_cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN location_lon NUMERIC(10,7)"))
+        if "age" not in user_cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN age INTEGER"))
+        if "gender" not in user_cols:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN gender TEXT"))
+        print("✓ Users table columns verified/added")
         
         # Add missing columns to events table (if they don't exist)
-        try:
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS moderation_status TEXT DEFAULT 'pending'"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'en'"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS has_discount BOOLEAN DEFAULT FALSE"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS is_sponsored BOOLEAN DEFAULT FALSE"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS category TEXT"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS location TEXT"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS location_lat NUMERIC(10,7)"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS location_lon NUMERIC(10,7)"))
-            await conn.execute(text("ALTER TABLE events ADD COLUMN IF NOT EXISTS tags TEXT[]"))
-            print("✓ Events table columns verified/added")
-        except Exception as e:
-            print(f"  Note: Events columns may already exist: {e}")
+        event_cols = await get_table_columns(conn, "events")
+        print(f"  Existing events columns: {event_cols}")
+        
+        if "moderation_status" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN moderation_status TEXT DEFAULT 'pending'"))
+        if "language" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN language TEXT DEFAULT 'en'"))
+        if "has_discount" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN has_discount BOOLEAN DEFAULT FALSE"))
+        if "is_sponsored" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN is_sponsored BOOLEAN DEFAULT FALSE"))
+        if "category" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN category TEXT"))
+        if "location" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN location TEXT"))
+        if "location_lat" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN location_lat NUMERIC(10,7)"))
+        if "location_lon" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN location_lon NUMERIC(10,7)"))
+        if "tags" not in event_cols:
+            await conn.execute(text("ALTER TABLE events ADD COLUMN tags TEXT[]"))
+        print("✓ Events table columns verified/added")
         
         # Blogs table (if not exists)
         await conn.execute(text("""
