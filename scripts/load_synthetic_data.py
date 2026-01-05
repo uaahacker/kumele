@@ -235,7 +235,7 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {len(HOBBIES)} hobbies loaded")
             
-            # 2. Generate and load users
+            # 2. Generate and load users (matches actual User model)
             print("Loading users...")
             user_ids = []
             for i in range(1, args.users + 1):
@@ -245,24 +245,22 @@ async def load_data(args):
                 email = f"{first_name.lower()}.{last_name.lower()}{i}@example.com"
                 
                 await session.execute(text("""
-                    INSERT INTO users (user_id, email, full_name, city, country, latitude, longitude, 
-                                       age, gender, is_verified, created_at, updated_at)
-                    VALUES (:user_id, :email, :full_name, :city, :country, :lat, :lon,
-                            :age, :gender, :verified, :created_at, :updated_at)
+                    INSERT INTO users (user_id, name, email, age, gender, location_lat, location_lon, 
+                                       preferred_language, reward_tier, created_at)
+                    VALUES (:user_id, :name, :email, :age, :gender, :lat, :lon,
+                            :lang, :tier, :created_at)
                     ON CONFLICT (user_id) DO NOTHING
                 """), {
                     "user_id": i,
+                    "name": f"{first_name} {last_name}",
                     "email": email,
-                    "full_name": f"{first_name} {last_name}",
-                    "city": city[0],
-                    "country": city[2],
-                    "lat": city[3] + random.uniform(-0.1, 0.1),
-                    "lon": city[4] + random.uniform(-0.1, 0.1),
                     "age": random.randint(18, 65),
                     "gender": random.choice(["male", "female", "other"]),
-                    "verified": random.random() > 0.3,
+                    "lat": city[3] + random.uniform(-0.1, 0.1),
+                    "lon": city[4] + random.uniform(-0.1, 0.1),
+                    "lang": random.choice(["en", "en", "en", "es", "fr"]),
+                    "tier": random.choice(["none", "none", "bronze", "silver", "gold"]),
                     "created_at": now - timedelta(days=random.randint(1, 365)),
-                    "updated_at": now - timedelta(days=random.randint(0, 30)),
                 })
                 user_ids.append(i)
             await session.commit()
@@ -288,36 +286,40 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {hobby_count} user-hobby relationships loaded")
             
-            # 4. Generate and load events
+            # 4. Generate and load events (matches actual Event model)
             print("Loading events...")
             event_ids = []
+            categories = ["music", "sports", "tech", "food", "art", "outdoor", "wellness", "networking"]
             for i in range(1, args.events + 1):
                 city = random.choice(CITIES)
-                event_type = random.choice(EVENT_TYPES)
+                category = random.choice(categories)
                 event_date = now + timedelta(days=random.randint(-60, 90))
                 
                 await session.execute(text("""
-                    INSERT INTO events (event_id, title, description, event_type, event_date,
-                                        location_name, city, country, latitude, longitude,
-                                        capacity, price, host_id, created_at)
-                    VALUES (:event_id, :title, :description, :event_type, :event_date,
-                            :location_name, :city, :country, :lat, :lon,
-                            :capacity, :price, :host_id, :created_at)
+                    INSERT INTO events (event_id, host_id, title, description, category, location,
+                                        location_lat, location_lon, capacity, price, event_date,
+                                        status, moderation_status, language, has_discount, is_sponsored, created_at)
+                    VALUES (:event_id, :host_id, :title, :description, :category, :location,
+                            :lat, :lon, :capacity, :price, :event_date,
+                            :status, :mod_status, :lang, :discount, :sponsored, :created_at)
                     ON CONFLICT (event_id) DO NOTHING
                 """), {
                     "event_id": i,
-                    "title": f"{event_type.title()} Event #{i}",
-                    "description": f"Join us for an amazing {event_type} experience in {city[0]}!",
-                    "event_type": event_type,
-                    "event_date": event_date,
-                    "location_name": f"{city[0]} {random.choice(['Center', 'Arena', 'Park', 'Hall', 'Club'])}",
-                    "city": city[0],
-                    "country": city[2],
+                    "host_id": random.choice(user_ids[:min(50, len(user_ids))]),
+                    "title": f"{category.title()} Event #{i}",
+                    "description": f"Join us for an amazing {category} experience in {city[0]}!",
+                    "category": category,
+                    "location": f"{city[0]} {random.choice(['Center', 'Arena', 'Park', 'Hall', 'Club'])}",
                     "lat": city[3] + random.uniform(-0.05, 0.05),
                     "lon": city[4] + random.uniform(-0.05, 0.05),
                     "capacity": random.choice([50, 100, 200, 500, 1000]),
                     "price": round(random.uniform(0, 150), 2),
-                    "host_id": random.choice(user_ids[:min(50, len(user_ids))]),
+                    "event_date": event_date,
+                    "status": random.choice(["scheduled", "scheduled", "scheduled", "ongoing", "completed"]),
+                    "mod_status": random.choice(["approved", "approved", "approved", "pending"]),
+                    "lang": random.choice(["en", "en", "en", "es", "fr"]),
+                    "discount": random.random() < 0.2,
+                    "sponsored": random.random() < 0.1,
                     "created_at": event_date - timedelta(days=random.randint(7, 60)),
                 })
                 event_ids.append(i)
