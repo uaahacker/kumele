@@ -406,17 +406,19 @@ async def load_data(args):
             # 6. Generate event ratings (uses dimension-based ratings)
             print("Loading event ratings...")
             rating_count = 0
+            rating_id = 1  # Start with id = 1
             for event_id in event_ids[:int(len(event_ids) * 0.7)]:  # 70% of events have ratings
                 num_ratings = random.randint(3, 15)
                 raters = random.sample(user_ids, min(num_ratings, len(user_ids)))
                 for user_id in raters:
                     await session.execute(text("""
-                        INSERT INTO event_ratings (event_id, user_id, communication, respect, 
+                        INSERT INTO event_ratings (id, event_id, user_id, communication, respect, 
                                                    professionalism, atmosphere, value_for_money, comment, created_at)
-                        VALUES (:event_id, :user_id, :communication, :respect, 
+                        VALUES (:id, :event_id, :user_id, :communication, :respect, 
                                 :professionalism, :atmosphere, :value_for_money, :comment, :created_at)
                         ON CONFLICT ON CONSTRAINT uq_event_user_rating DO NOTHING
                     """), {
+                        "id": rating_id,
                         "event_id": event_id,
                         "user_id": user_id,
                         "communication": round(random.uniform(3.0, 5.0), 1),
@@ -432,6 +434,7 @@ async def load_data(args):
                         ]),
                         "created_at": now - timedelta(days=random.randint(0, 60)),
                     })
+                    rating_id += 1
                     rating_count += 1
             await session.commit()
             print(f"  ✓ {rating_count} event ratings loaded")
