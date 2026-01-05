@@ -533,15 +533,14 @@ async def load_data(args):
             wallet_ids = {}
             for user_id in random.sample(user_ids, int(len(user_ids) * 0.4)):
                 await session.execute(text("""
-                    INSERT INTO user_wallets (user_id, wallet_address, wallet_type, is_primary, verified)
-                    VALUES (:user_id, :address, :type, :is_primary, :verified)
+                    INSERT INTO user_wallets (user_id, wallet_address, wallet_type, is_primary)
+                    VALUES (:user_id, :address, :type, :is_primary)
                     RETURNING wallet_id
                 """), {
                     "user_id": user_id,
                     "address": generate_wallet_address(),
                     "type": "solana",
                     "is_primary": True,
-                    "verified": random.random() > 0.3,
                 })
                 wallet_count += 1
             await session.commit()
