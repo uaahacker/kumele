@@ -807,6 +807,8 @@ async def load_data(args):
                         data["id"] = str(uuid.uuid4())
                     if "email_id" in support_cols:
                         data["email_id"] = str(uuid.uuid4())
+                    if "thread_id" in support_cols:
+                        data["thread_id"] = str(uuid.uuid4())  # Always required (NOT NULL)
                     if "from_email" in support_cols:
                         data["from_email"] = f"{first_name.lower()}.{last_name.lower()}@email.com"
                     if "to_email" in support_cols:
@@ -833,8 +835,6 @@ async def load_data(args):
                         data["urgency_score"] = random.uniform(0, 10)
                     if "language" in support_cols:
                         data["language"] = "en"
-                    if "thread_id" in support_cols and random.random() > 0.7:
-                        data["thread_id"] = str(uuid.uuid4())
                     
                     await session.execute(text(f"""
                         INSERT INTO support_emails ({', '.join(data.keys())})
