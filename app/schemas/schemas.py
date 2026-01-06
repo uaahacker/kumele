@@ -641,12 +641,12 @@ class RewardProgressResponse(BaseModel):
 # MATCHING SCHEMAS
 # ============================================
 class ScoreBreakdown(BaseModel):
-    """Score breakdown for matching."""
-    distance: float
-    hobby_match: float
-    engagement: float
-    host_rating: float
-    reward_boost: float
+    """Score breakdown for matching pipeline."""
+    relevance: float = 0.0      # ML embedding similarity
+    trust: float = 0.0          # Host rating + reliability
+    engagement: float = 0.0     # Event popularity (clicks, RSVPs)
+    freshness: float = 0.0      # Event recency
+    business: float = 0.0       # Rewards & promotions
 
 
 class EventMatchItem(BaseModel):
@@ -658,6 +658,7 @@ class EventMatchItem(BaseModel):
     location: Optional[str] = None
     distance_km: Optional[float] = None
     score: float
+    reasons: Optional[List[str]] = None
     score_breakdown: ScoreBreakdown
     host_id: Optional[str] = None
 
@@ -667,9 +668,12 @@ class EventMatchResponse(BaseModel):
     user_id: str
     matched_events: List[EventMatchItem]
     total_found: int
+    total_returned: int
     filters_applied: Dict[str, Any]
-    user_context: Dict[str, Any]
+    weights_used: Optional[Dict[str, float]] = None
+    processing_time_ms: Optional[float] = None
     computed_at: str
+    pipeline_version: Optional[str] = None
 
 
 # ============================================
