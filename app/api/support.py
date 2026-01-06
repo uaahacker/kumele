@@ -184,40 +184,10 @@ async def escalate_email(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get(
-    "/email/{email_id}",
-    response_model=SupportEmailDetailsResponse,
-    summary="Get Email Details",
-    description="""
-    Get full details of a support email.
-    
-    Returns:
-    - Email content
-    - AI analysis
-    - Thread history
-    - Status and priority
-    - Agent assignments
-    """
-)
-async def get_email_details(
-    email_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """Get email details."""
-    try:
-        result = await SupportService.get_email_details(db, email_id)
-        
-        if "error" in result:
-            raise HTTPException(status_code=404, detail=result["error"])
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Get email details error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+# ============================================
+# GET ENDPOINTS - STATIC PATHS FIRST!
+# (Must come before /email/{email_id})
+# ============================================
 
 @router.get(
     "/email/list",
@@ -230,8 +200,8 @@ async def get_email_details(
     """
 )
 async def list_emails(
-    status: Optional[str] = Query(None, description="Filter by status"),
-    category: Optional[str] = Query(None, description="Filter by category"),
+    status: Optional[str] = Query(None, description="Filter by status: received, processing, awaiting_human, replied, closed"),
+    category: Optional[str] = Query(None, description="Filter by category: support, billing, partnership, feedback, abuse, other"),
     priority_min: Optional[int] = Query(None, ge=1, le=5, description="Minimum priority"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -261,8 +231,8 @@ async def list_emails(
     description="Get support email queue with filters."
 )
 async def get_email_queue(
-    status: Optional[str] = Query(None, description="Filter by status"),
-    category: Optional[str] = Query(None, description="Filter by category"),
+    status: Optional[str] = Query(None, description="Filter by status: received, processing, awaiting_human, replied, closed"),
+    category: Optional[str] = Query(None, description="Filter by category: support, billing, partnership, feedback, abuse, other"),
     priority_min: Optional[int] = Query(None, ge=1, le=5, description="Minimum priority"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -292,7 +262,7 @@ async def get_email_queue(
     description="Get support email statistics."
 )
 async def get_support_stats(
-    days: int = Query(7, ge=1, le=90),
+    days: int = Query(7, ge=1, le=90, description="Statistics for last N days"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get support statistics."""
@@ -339,4 +309,43 @@ async def get_support_stats(
         
     except Exception as e:
         logger.error(f"Get stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# GET ENDPOINT WITH DYNAMIC PATH - MUST BE LAST!
+# ============================================
+
+@router.get(
+    "/email/{email_id}",
+    response_model=SupportEmailDetailsResponse,
+    summary="Get Email Details",
+    description="""
+    Get full details of a support email.
+    
+    Returns:
+    - Email content
+    - AI analysis
+    - Thread history
+    - Status and priority
+    - Agent assignments
+    """
+)
+async def get_email_details(
+    email_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get email details."""
+    try:
+        result = await SupportService.get_email_details(db, email_id)
+        
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get email details error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
