@@ -303,33 +303,69 @@ Kumele Support Team"""
         # Determine if escalation needed
         needs_escalation = priority >= 4 or sentiment_data["sentiment"] == "negative"
         
-        # Create email record
+        # Map category to valid check constraint values
+        # Valid: 'support', 'billing', 'partnership', 'feedback', 'abuse', 'other'
+        category_map = {
+            "billing": "billing",
+            "technical": "support",
+            "account": "support",
+            "event": "support",
+            "general": "other"
+        }
+        db_category = category_map.get(category, "other")
+        
+        # Create email record (matches actual DB schema)
         email = SupportEmail(
             id=email_id,
-            user_id=uuid.UUID(user_id) if user_id else None,
-            from_email=sender_email,
-            subject=subject,
-            body=body,
             thread_id=uuid.UUID(thread_id) if thread_id else email_id,
-            status="new",
-            priority=priority,
-            created_at=datetime.utcnow()
+            from_email=sender_email,
+            to_email=settings.SMTP_USER or "support@kumele.com",
+            subject=subject,
+            raw_body=body,
+            cleaned_body=body.strip(),
+            language="en",
+            status="received",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
         )
         db.add(email)
         
-        # Create analysis record
+        # Create analysis record (matches actual DB schema)
         analysis = SupportEmailAnalysis(
             email_id=email_id,
-            category=category,
+            category=db_category,
             sentiment=sentiment_data["sentiment"],
             sentiment_score=sentiment_data["score"],
-            priority_score=priority,
-            entities=entities,
-            suggested_reply=draft_reply,
-            needs_escalation=needs_escalation,
+            confidence=0.85,
+            model_name="rule-based",
+            model_version="1.0",
             analyzed_at=datetime.utcnow()
         )
         db.add(analysis)
+        
+        # Create draft reply record
+        from app.models.database_models import SupportEmailReply
+        reply_draft = SupportEmailReply(
+            id=uuid.uuid4(),
+            email_id=email_id,
+            draft_body=draft_reply,
+            is_ai_generated=True,
+            sent=False,
+            created_at=datetime.utcnow()
+        )
+        db.add(reply_draft)
+        
+        # Create escalation if needed
+        if needs_escalation:
+            from app.models.database_models import SupportEmailEscalation
+            escalation = SupportEmailEscalation(
+                id=uuid.uuid4(),
+                email_id=email_id,
+                reason=f"Priority {priority}, Sentiment: {sentiment_data['sentiment']}",
+                triggered_by="sentiment" if sentiment_data["sentiment"] == "negative" else "manual",
+                escalated_at=datetime.utcnow()
+            )
+            db.add(escalation)
         
         await db.flush()
         
@@ -341,7 +377,7 @@ Kumele Support Team"""
             "needs_escalation": needs_escalation,
             "draft_reply": draft_reply,
             "entities": entities,
-            "status": "new"
+            "status": "received"
         }
 
     @staticmethod
@@ -354,7 +390,6 @@ Kumele Support Team"""
         """Send a reply to a support email."""
         try:
             email_uuid = uuid.UUID(email_id)
-            agent_uuid = uuid.UUID(agent_id)
             
             # Get original email
             query = select(SupportEmail).where(SupportEmail.id == email_uuid)
@@ -367,34 +402,44 @@ Kumele Support Team"""
                     "message": "Email not found"
                 }
             
-            # Create reply record
+            # Update or create reply record in support_email_replies
+            from app.models.database_models import SupportEmailReply
+            
+            # Check for existing draft
+            draft_query = select(SupportEmailReply).where(SupportEmailReply.email_id == email_uuid)
+            draft_result = await db.execute(draft_query)
+            draft = draft_result.scalar_one_or_none()
+            
             reply_id = uuid.uuid4()
-            reply = SupportEmail(
-                id=reply_id,
-                user_id=original.user_id,
-                from_email=settings.SMTP_USER,
-                to_email=original.from_email,
-                subject=f"Re: {original.subject}",
-                body=reply_body,
-                thread_id=original.thread_id,
-                parent_id=original.id,
-                status="sent",
-                priority=original.priority,
-                assigned_to=agent_uuid,
-                replied_at=datetime.utcnow(),
-                created_at=datetime.utcnow()
-            )
-            db.add(reply)
+            if draft:
+                # Update existing draft
+                draft.final_body = reply_body
+                draft.approved_by = agent_id
+                draft.sent = True
+                draft.sent_at = datetime.utcnow()
+                reply_id = draft.id
+            else:
+                # Create new reply
+                reply = SupportEmailReply(
+                    id=reply_id,
+                    email_id=email_uuid,
+                    draft_body=reply_body,
+                    final_body=reply_body,
+                    is_ai_generated=False,
+                    approved_by=agent_id,
+                    sent=True,
+                    sent_at=datetime.utcnow(),
+                    created_at=datetime.utcnow()
+                )
+                db.add(reply)
             
             # Update original email status
             original.status = "replied"
-            original.assigned_to = agent_uuid
-            original.replied_at = datetime.utcnow()
+            original.updated_at = datetime.utcnow()
             
             await db.flush()
             
             # In production, actually send email via SMTP
-            # For now, just log
             logger.info(f"Reply sent to {original.from_email}")
             
             return {
@@ -431,27 +476,27 @@ Kumele Support Team"""
                     "message": "Email not found"
                 }
             
-            email.status = "escalated"
-            email.priority = min(5, email.priority + 1)
+            # Update email status to awaiting_human (valid status value)
+            email.status = "awaiting_human"
+            email.updated_at = datetime.utcnow()
             
-            # Update analysis
-            analysis_query = select(SupportEmailAnalysis).where(
-                SupportEmailAnalysis.email_id == email_uuid
+            # Create escalation record
+            from app.models.database_models import SupportEmailEscalation
+            escalation = SupportEmailEscalation(
+                id=uuid.uuid4(),
+                email_id=email_uuid,
+                reason=reason,
+                triggered_by="manual",
+                escalated_at=datetime.utcnow()
             )
-            analysis_result = await db.execute(analysis_query)
-            analysis = analysis_result.scalar_one_or_none()
-            
-            if analysis:
-                analysis.needs_escalation = True
-                analysis.escalation_reason = reason
-                analysis.escalated_by = uuid.UUID(escalated_by)
+            db.add(escalation)
             
             await db.flush()
             
             return {
                 "success": True,
                 "email_id": email_id,
-                "new_priority": email.priority,
+                "new_priority": 5,  # Escalated emails are high priority
                 "message": "Email escalated successfully"
             }
             
@@ -501,7 +546,7 @@ Kumele Support Team"""
                         "id": str(e.id),
                         "from_email": e.from_email,
                         "subject": e.subject,
-                        "body": e.body[:200] + "..." if len(e.body) > 200 else e.body,
+                        "body": e.raw_body[:200] + "..." if len(e.raw_body) > 200 else e.raw_body,
                         "created_at": e.created_at.isoformat()
                     }
                     for e in thread_result.scalars().all()
@@ -512,11 +557,11 @@ Kumele Support Team"""
                 "from_email": email.from_email,
                 "to_email": email.to_email,
                 "subject": email.subject,
-                "body": email.body,
+                "body": email.raw_body,
                 "status": email.status,
-                "priority": email.priority,
+                "priority": 3,  # Default priority since column doesn't exist
                 "created_at": email.created_at.isoformat(),
-                "replied_at": email.replied_at.isoformat() if email.replied_at else None,
+                "replied_at": None,
                 "thread": thread_emails
             }
             
@@ -524,10 +569,8 @@ Kumele Support Team"""
                 result["analysis"] = {
                     "category": analysis.category,
                     "sentiment": analysis.sentiment,
-                    "sentiment_score": analysis.sentiment_score,
-                    "entities": analysis.entities,
-                    "suggested_reply": analysis.suggested_reply,
-                    "needs_escalation": analysis.needs_escalation
+                    "sentiment_score": float(analysis.sentiment_score) if analysis.sentiment_score else None,
+                    "confidence": float(analysis.confidence) if analysis.confidence else None
                 }
             
             return result
@@ -546,13 +589,10 @@ Kumele Support Team"""
         offset: int = 0
     ) -> Dict[str, Any]:
         """Get support email queue with filters."""
-        query = select(SupportEmail).order_by(desc(SupportEmail.priority), SupportEmail.created_at)
+        query = select(SupportEmail).order_by(desc(SupportEmail.created_at))
         
         if status:
             query = query.where(SupportEmail.status == status)
-        
-        if priority_min:
-            query = query.where(SupportEmail.priority >= priority_min)
         
         query = query.limit(limit).offset(offset)
         
@@ -573,7 +613,7 @@ Kumele Support Team"""
                 "from_email": email.from_email,
                 "subject": email.subject,
                 "status": email.status,
-                "priority": email.priority,
+                "priority": 3,  # Default priority
                 "created_at": email.created_at.isoformat()
             }
             
