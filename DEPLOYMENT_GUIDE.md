@@ -285,6 +285,7 @@ GET /i18n/ar?scope=common
 
 ### Container Not Starting
 ```bash
+docker exec -it kumele-api python scripts/load_synthetic_data.py --users 500 --events 200
 # Check logs
 docker-compose logs api
 docker-compose logs worker
