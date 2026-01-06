@@ -793,6 +793,9 @@ async def load_data(args):
             }
             
             if support_cols:  # Only if table exists
+                # Valid status values per check constraint
+                valid_statuses = ["received", "processing", "awaiting_human", "replied", "closed"]
+                
                 for i in range(min(50, args.users)):
                     subj, category, sentiment = random.choice(support_subjects)
                     user_id = random.choice(user_ids)
@@ -824,7 +827,7 @@ async def load_data(args):
                     if "user_id" in support_cols:
                         data["user_id"] = user_id
                     if "status" in support_cols:
-                        data["status"] = random.choice(["new", "analyzing", "routed", "draft_ready", "sent"])
+                        data["status"] = random.choice(valid_statuses)
                     if "category" in support_cols:
                         data["category"] = category
                     if "sentiment" in support_cols:
