@@ -798,17 +798,27 @@ async def load_data(args):
                     user_id = random.choice(user_ids)
                     first_name = random.choice(FIRST_NAMES)
                     last_name = random.choice(LAST_NAMES)
+                    body_text = random.choice(support_bodies.get(category, ["General inquiry."]))
                     
                     data = {"created_at": now - timedelta(days=random.randint(0, 30))}
                     
+                    # UUID id column (required, not null)
+                    if "id" in support_cols:
+                        data["id"] = str(uuid.uuid4())
                     if "email_id" in support_cols:
                         data["email_id"] = str(uuid.uuid4())
                     if "from_email" in support_cols:
                         data["from_email"] = f"{first_name.lower()}.{last_name.lower()}@email.com"
+                    if "to_email" in support_cols:
+                        data["to_email"] = "support@kumele.com"
                     if "subject" in support_cols:
                         data["subject"] = subj
+                    if "raw_body" in support_cols:
+                        data["raw_body"] = body_text
+                    if "cleaned_body" in support_cols:
+                        data["cleaned_body"] = body_text
                     if "body" in support_cols:
-                        data["body"] = random.choice(support_bodies.get(category, ["General inquiry."]))
+                        data["body"] = body_text
                     if "user_id" in support_cols:
                         data["user_id"] = user_id
                     if "status" in support_cols:
@@ -821,8 +831,10 @@ async def load_data(args):
                         data["priority"] = random.randint(1, 5)
                     if "urgency_score" in support_cols:
                         data["urgency_score"] = random.uniform(0, 10)
-                    if "thread_id" in support_cols:
-                        data["thread_id"] = str(uuid.uuid4()) if random.random() > 0.7 else None
+                    if "language" in support_cols:
+                        data["language"] = "en"
+                    if "thread_id" in support_cols and random.random() > 0.7:
+                        data["thread_id"] = str(uuid.uuid4())
                     
                     await session.execute(text(f"""
                         INSERT INTO support_emails ({', '.join(data.keys())})
