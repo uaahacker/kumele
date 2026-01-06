@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     SMTP_PORT: int
     SMTP_USER: str
     SMTP_PASS: str
+    SMTP_TLS: bool = True  # Enable TLS for secure connection
+    
+    # Alias for backwards compatibility
+    @property
+    def SMTP_PASSWORD(self) -> str:
+        return self.SMTP_PASS
 
     # ==========================================================================
     # Celery (Async Task Queue)

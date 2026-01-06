@@ -744,6 +744,94 @@ async def load_data(args):
             await session.commit()
             print(f"  ✓ {ugc_count} UGC content items loaded")
             
+            # 19. Generate Support Emails for testing email support system
+            print("Loading support emails...")
+            support_cols = await get_table_columns(session, "support_emails")
+            print(f"  Support emails columns: {support_cols}")
+            support_count = 0
+            
+            # Sample support email data
+            support_subjects = [
+                ("Payment not processed", "billing", "negative"),
+                ("Can't login to my account", "account", "negative"),
+                ("Great experience at the event!", "event", "positive"),
+                ("How do I host an event?", "event", "neutral"),
+                ("Refund request for cancelled event", "billing", "negative"),
+                ("App keeps crashing", "technical", "negative"),
+                ("Love this platform!", "general", "positive"),
+                ("Need help with profile settings", "account", "neutral"),
+                ("Event not showing up", "technical", "negative"),
+                ("Suggestion for new feature", "general", "neutral"),
+            ]
+            
+            support_bodies = {
+                "billing": [
+                    "I tried to make a payment but it keeps failing. Please help!",
+                    "I was charged twice for the same event. Need a refund ASAP.",
+                    "My card was declined but I have funds. What's wrong?"
+                ],
+                "account": [
+                    "I forgot my password and can't reset it. Help!",
+                    "My profile picture won't upload. Getting an error.",
+                    "I want to delete my account. How do I do that?"
+                ],
+                "technical": [
+                    "The app crashes every time I open events. Very frustrating!",
+                    "Getting a 500 error when trying to RSVP.",
+                    "The search function isn't working properly."
+                ],
+                "event": [
+                    "How do I cancel my attendance at an event?",
+                    "Can I change the date of my hosted event?",
+                    "Where can I see my upcoming events?"
+                ],
+                "general": [
+                    "What a wonderful app! Keep up the great work!",
+                    "Would love to see a dark mode feature.",
+                    "How does the matching algorithm work?"
+                ]
+            }
+            
+            if support_cols:  # Only if table exists
+                for i in range(min(50, args.users)):
+                    subj, category, sentiment = random.choice(support_subjects)
+                    user_id = random.choice(user_ids)
+                    first_name = random.choice(FIRST_NAMES)
+                    last_name = random.choice(LAST_NAMES)
+                    
+                    data = {"created_at": now - timedelta(days=random.randint(0, 30))}
+                    
+                    if "email_id" in support_cols:
+                        data["email_id"] = str(uuid.uuid4())
+                    if "from_email" in support_cols:
+                        data["from_email"] = f"{first_name.lower()}.{last_name.lower()}@email.com"
+                    if "subject" in support_cols:
+                        data["subject"] = subj
+                    if "body" in support_cols:
+                        data["body"] = random.choice(support_bodies.get(category, ["General inquiry."]))
+                    if "user_id" in support_cols:
+                        data["user_id"] = user_id
+                    if "status" in support_cols:
+                        data["status"] = random.choice(["new", "analyzing", "routed", "draft_ready", "sent"])
+                    if "category" in support_cols:
+                        data["category"] = category
+                    if "sentiment" in support_cols:
+                        data["sentiment"] = sentiment
+                    if "priority" in support_cols:
+                        data["priority"] = random.randint(1, 5)
+                    if "urgency_score" in support_cols:
+                        data["urgency_score"] = random.uniform(0, 10)
+                    if "thread_id" in support_cols:
+                        data["thread_id"] = str(uuid.uuid4()) if random.random() > 0.7 else None
+                    
+                    await session.execute(text(f"""
+                        INSERT INTO support_emails ({', '.join(data.keys())})
+                        VALUES ({', '.join(':' + k for k in data.keys())})
+                    """), data)
+                    support_count += 1
+                await session.commit()
+            print(f"  ✓ {support_count} support emails loaded")
+            
             # Print summary
             print("\n" + "=" * 60)
             print("Data Loading Complete!")
@@ -769,6 +857,7 @@ Summary:
 - Messages: ~{message_count}
 - Notifications: ~{notif_count}
 - UGC content: ~{ugc_count}
+- Support emails: ~{support_count}
 
 Your database is now populated with test data!
 Try the APIs at: http://YOUR_IP:8000/docs
