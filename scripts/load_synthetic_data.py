@@ -153,6 +153,17 @@ async def create_tables(engine):
             await conn.execute(text("ALTER TABLE events ADD COLUMN tags TEXT[]"))
         print("✓ Events table columns verified/added")
         
+        # Add missing columns to event_stats table (if they don't exist)
+        event_stats_cols = await get_table_columns(conn, "event_stats")
+        print(f"  Existing event_stats columns: {event_stats_cols}")
+        
+        if event_stats_cols:  # Table exists
+            if "clicks" not in event_stats_cols:
+                await conn.execute(text("ALTER TABLE event_stats ADD COLUMN clicks INTEGER DEFAULT 0"))
+            if "saves" not in event_stats_cols:
+                await conn.execute(text("ALTER TABLE event_stats ADD COLUMN saves INTEGER DEFAULT 0"))
+            print("✓ Event stats table columns verified/added")
+        
         # Blogs table (if not exists)
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS blogs (
