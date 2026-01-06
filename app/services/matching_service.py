@@ -419,7 +419,7 @@ class MatchingService:
                 if host_rating:
                     # Weighted host score
                     reviews_score = float(host_rating.overall_score_5 or 3.0) / 5.0
-                    completion_score = float(host_rating.completion_rate or 0.8)
+                    completion_score = float(host_rating.event_completion_ratio or 0.8)
                     
                     host_score = (
                         reviews_score * MatchingService.HOST_REVIEWS_WEIGHT +

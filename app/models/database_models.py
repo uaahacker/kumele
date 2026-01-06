@@ -148,12 +148,9 @@ class HostRatingAggregate(Base):
     avg_value_for_money = Column(Numeric(3, 2))
     
     # System reliability metrics (0-1)
-    event_completion_ratio = Column(Numeric(5, 4))
+    event_completion_ratio = Column(Numeric(5, 4))  # Used by trust scoring: 0.7×reviews + 0.3×completion
     attendance_follow_through = Column(Numeric(5, 4))
     repeat_attendee_ratio = Column(Numeric(5, 4))
-    
-    # Matching pipeline field (alias for event_completion_ratio)
-    completion_rate = Column(Numeric(5, 4))  # Used by trust scoring: 0.7×reviews + 0.3×completion
     
     # Badges (JSON array)
     badges = Column(JSONB, default=[])
