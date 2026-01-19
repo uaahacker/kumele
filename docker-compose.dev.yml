@@ -73,22 +73,28 @@ services:
         limits:
           memory: 512M
 
-  # LibreTranslate / Argos Translate (optional - comment out to save RAM)
-  # argos:
-  #   image: libretranslate/libretranslate:latest
-  #   container_name: kumele_argos
-  #   environment:
-  #     - LT_LOAD_ONLY=en,es,fr
-  #     - LT_DISABLE_WEB_UI=true
-  #   ports:
-  #     - "5000:5000"
-  #   networks:
-  #     - kumele_network
-  #   restart: unless-stopped
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 512M
+  # LibreTranslate / Argos Translate
+  argos:
+    image: libretranslate/libretranslate:latest
+    container_name: kumele_argos
+    environment:
+      - LT_LOAD_ONLY=en,es,fr,de,ar
+      - LT_DISABLE_WEB_UI=true
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/languages || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - kumele_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   # FastAPI Application
   api:
@@ -104,8 +110,8 @@ services:
       - DATABASE_URL=postgresql://kumele:${POSTGRES_PASSWORD:-kumele}@postgres:5432/kumele_ai
       - REDIS_URL=redis://redis:6379/0
       - QDRANT_URL=http://qdrant:6333
-      # Translation - disabled by default to save RAM
-      - TRANSLATE_URL=${TRANSLATE_URL:-}
+      # Translation
+      - TRANSLATE_URL=http://argos:5000
       # LLM Configuration - Use OpenRouter by default in dev mode
       - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
       - LLM_API_URL=${LLM_API_URL:-http://mistral:80}
