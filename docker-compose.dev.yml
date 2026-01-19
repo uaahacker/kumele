@@ -126,6 +126,7 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     volumes:
       - ./kumele_ai:/app/kumele_ai
+      - ./scripts:/app/scripts
       - model_cache:/root/.cache
     ports:
       - "8000:8000"
