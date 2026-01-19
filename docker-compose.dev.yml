@@ -6,8 +6,6 @@
 #
 # This file excludes the Mistral TGI container and configures the API to use OpenRouter
 
-version: '3.8'
-
 services:
   # PostgreSQL Database
   postgres:
@@ -62,10 +60,11 @@ services:
       - "6333:6333"
       - "6334:6334"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6333/readyz || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 10s
     networks:
       - kumele_network
     restart: unless-stopped
@@ -130,9 +129,9 @@ services:
       redis:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/ai/health"]
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/ai/health\")' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
