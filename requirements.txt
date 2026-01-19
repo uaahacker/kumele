@@ -1,84 +1,68 @@
-# Kumele AI/ML Backend Dependencies
+# Kumele AI/ML Service Dependencies
 
-# =============================================================================
-# CORE FRAMEWORK
-# =============================================================================
+# Core Framework
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
 pydantic==2.5.3
 pydantic-settings==2.1.0
 
-# =============================================================================
-# DATABASE
-# =============================================================================
-sqlalchemy[asyncio]==2.0.25
-asyncpg==0.29.0
+# Database
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
 alembic==1.13.1
 
-# =============================================================================
-# CACHING & QUEUE
-# =============================================================================
+# Redis & Celery
 redis==5.0.1
-aioredis==2.0.1
+celery==5.3.4
 
-# =============================================================================
-# HTTP CLIENT
-# =============================================================================
+# AI/ML Libraries
+scikit-learn==1.4.0
+numpy==1.26.3
+pandas==2.1.4
+
+# Hugging Face
+transformers==4.36.2
+torch==2.1.2
+sentence-transformers==2.2.2
+
+# TensorFlow Recommenders
+tensorflow==2.15.0
+tensorflow-recommenders==0.7.3
+
+# Prophet for forecasting
+prophet==1.1.5
+
+# Vector Database Client
+qdrant-client==1.7.0
+
+# HTTP Client
 httpx==0.26.0
 aiohttp==3.9.1
 
-# =============================================================================
-# BACKGROUND TASKS (Celery)
-# =============================================================================
-celery==5.3.4
-flower==2.0.1
+# Image Processing
+Pillow==10.2.0
 
-# =============================================================================
-# ML/NLP - Open Source Stack
-# =============================================================================
-# Language Detection (for multi-language support)
-langdetect==1.0.9
+# NLP Tools
+nltk==3.8.1
+rake-nltk==1.0.6
 
-# Numerical/Scientific Computing
-numpy==1.26.4
-scikit-learn==1.4.0
+# Email
+aiosmtplib==3.0.1
+email-validator==2.1.0
 
-# TensorFlow Recommenders (TFRS) - Two-Tower Model
-# Note: TensorFlow is heavy, install separately if needed
-# tensorflow==2.15.0
-# tensorflow-recommenders==0.7.3
-
-# HuggingFace for local inference (optional)
-# transformers==4.36.2
-# torch==2.1.2
-# sentence-transformers==2.2.2
-
-# Time Series Forecasting - Host Attendance Prediction
-prophet==1.1.5
-
-# =============================================================================
-# SYSTEM MONITORING
-# =============================================================================
-psutil==5.9.8
-
-# =============================================================================
-# SECURITY & AUTH
-# =============================================================================
+# Utilities
 python-multipart==0.0.6
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-email-validator==2.1.0.post1
+python-dotenv==1.0.0
+passlib==1.7.4
 
-# =============================================================================
-# TESTING
-# =============================================================================
-pytest==7.4.4
-pytest-asyncio==0.23.3
+# Geolocation
+geopy==2.4.1
 
-# =============================================================================
-# DEVELOPMENT
-# =============================================================================
-black==24.1.0
-isort==5.13.2
-flake8==7.0.0
-mypy==1.8.0   
+# Retry logic
+tenacity==8.2.3
+
+# Data Generation (for synthetic data)
+Faker==22.0.0
+
+# Logging
+structlog==24.1.0

@@ -1,3 +1,0 @@
-"""
-Worker tasks module initialization.
-"""

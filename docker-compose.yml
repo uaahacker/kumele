@@ -1,183 +1,180 @@
-# Kumele AI/ML Backend - Docker Compose
 version: '3.8'
 
 services:
-  # ==========================================================================
-  # NGINX REVERSE PROXY (Production Gateway)
-  # ==========================================================================
-  nginx:
-    image: nginx:1.25-alpine
-    container_name: kumele-nginx
-    ports:
-      - "80:80"
-      - "443:443"
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: kumele_postgres
+    environment:
+      POSTGRES_USER: kumele
+      POSTGRES_PASSWORD: kumele
+      POSTGRES_DB: kumele_ai
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - nginx_cache:/var/cache/nginx
-      - nginx_logs:/var/log/nginx
-    depends_on:
-      - api
-    restart: unless-stopped
-    networks:
-      - kumele-network
+      - postgres_data:/var/lib/postgresql/data
+      - ./kumele_ai/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      test: ["CMD-SHELL", "pg_isready -U kumele -d kumele_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kumele_network
+
+  # Redis for Queue and Cache
+  redis:
+    image: redis:7-alpine
+    container_name: kumele_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kumele_network
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: kumele_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kumele_network
+
+  # LibreTranslate / Argos Translate
+  argos:
+    image: libretranslate/libretranslate:latest
+    container_name: kumele_argos
+    environment:
+      - LT_LOAD_ONLY=en,es,fr,de,ar,zh
+      - LT_DISABLE_WEB_UI=true
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/languages"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+    networks:
+      - kumele_network
 
-  # Main API Application
+  # Mistral LLM via Text Generation Inference
+  mistral:
+    image: ghcr.io/huggingface/text-generation-inference:latest
+    container_name: kumele_mistral
+    environment:
+      - MODEL_ID=mistralai/Mistral-7B-Instruct-v0.2
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - MAX_INPUT_LENGTH=4096
+      - MAX_TOTAL_TOKENS=8192
+    volumes:
+      - mistral_data:/data
+    ports:
+      - "8080:80"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    networks:
+      - kumele_network
+
+  # FastAPI Application
   api:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: kumele-api
-    # Internal port only - nginx handles external traffic
-    expose:
-      - "8000"
+      dockerfile: docker/Dockerfile.api
+    container_name: kumele_api
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - SECRET_KEY=${SECRET_KEY:-change-me}
+      - API_KEY=${API_KEY:-internal-api-key}
+      - DATABASE_URL=postgresql://kumele:kumele@postgres:5432/kumele_ai
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - TRANSLATE_URL=http://argos:5000
+      - LLM_API_URL=http://mistral:80
+      - LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./kumele_ai:/app/kumele_ai
+      - model_cache:/root/.cache
     ports:
-      - "8000:8000"  # Keep direct access for development
-    env_file:
-      - .env
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       qdrant:
-        condition: service_started
-    restart: unless-stopped
-    networks:
-      - kumele-network
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ai/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 10s
+      retries: 5
+    networks:
+      - kumele_network
 
-  # Celery Worker for background tasks
+  # Celery Worker
   worker:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: kumele-worker
-    command: celery -A worker.celery_app worker --loglevel=info
-    env_file:
-      - .env
+      dockerfile: docker/Dockerfile.worker
+    container_name: kumele_worker
+    environment:
+      - APP_ENV=production
+      - DATABASE_URL=postgresql://kumele:kumele@postgres:5432/kumele_ai
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - TRANSLATE_URL=http://argos:5000
+      - LLM_API_URL=http://mistral:80
+      - LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./kumele_ai:/app/kumele_ai
+      - model_cache:/root/.cache
     depends_on:
-      - api
-      - redis
-    restart: unless-stopped
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
-      - kumele-network
-
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: kumele-postgres
-    environment:
-      - POSTGRES_USER=kumele
-      - POSTGRES_PASSWORD=kumele_pass
-      - POSTGRES_DB=kumele_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    networks:
-      - kumele-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kumele -d kumele_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis for caching and task queue
-  redis:
-    image: redis:7-alpine
-    container_name: kumele-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    networks:
-      - kumele-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Qdrant Vector Database
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: kumele-qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    restart: unless-stopped
-    networks:
-      - kumele-network
-
-  # LibreTranslate for translation
-  libretranslate:
-    image: libretranslate/libretranslate:latest
-    container_name: kumele-translate
-    ports:
-      - "5000:5000"
-    environment:
-      - LT_LOAD_ONLY=en,fr,es,zh,ar,de
-      - LT_DISABLE_FILES_TRANSLATION=true
-    volumes:
-      - translate_data:/home/libretranslate/.local
-    restart: unless-stopped
-    networks:
-      - kumele-network
-
-  # Text Generation Inference (TGI) for LLM
-  tgi:
-    image: ghcr.io/huggingface/text-generation-inference:latest
-    container_name: kumele-tgi
-    ports:
-      - "8080:80"
-    environment:
-      - MODEL_ID=mistralai/Mistral-7B-Instruct-v0.2
-      - QUANTIZE=bitsandbytes-nf4
-      - MAX_INPUT_LENGTH=2048
-      - MAX_TOTAL_TOKENS=4096
-    volumes:
-      - tgi_data:/data
-    restart: unless-stopped
-    networks:
-      - kumele-network
-
-  # Flower for Celery monitoring (optional)
-  flower:
-    image: mher/flower:0.9.7
-    container_name: kumele-flower
-    command: celery --broker=redis://redis:6379/0 flower --port=5555
-    ports:
-      - "5555:5555"
-    depends_on:
-      - redis
-      - worker
-    restart: unless-stopped
-    networks:
-      - kumele-network
+      - kumele_network
 
 volumes:
   postgres_data:
   redis_data:
   qdrant_data:
-  translate_data:
-  tgi_data:
-  nginx_cache:
-  nginx_logs:
+  mistral_data:
+  model_cache:
 
 networks:
-  kumele-network:
+  kumele_network:
     driver: bridge

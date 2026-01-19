@@ -1,0 +1,190 @@
+# Docker Compose - Development/Cloud Mode (No GPU)
+# Use this for DigitalOcean droplets, local dev without GPU, or when using OpenRouter
+#
+# Usage:
+#   docker-compose -f docker-compose.dev.yml up -d
+#
+# This file excludes the Mistral TGI container and configures the API to use OpenRouter
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: kumele_postgres
+    environment:
+      POSTGRES_USER: kumele
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kumele}
+      POSTGRES_DB: kumele_ai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./kumele_ai/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kumele -d kumele_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kumele_network
+    restart: unless-stopped
+
+  # Redis for Queue and Cache
+  redis:
+    image: redis:7-alpine
+    container_name: kumele_redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kumele_network
+    restart: unless-stopped
+
+  # Qdrant Vector Database (lightweight mode for small RAM)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: kumele_qdrant
+    environment:
+      - QDRANT__STORAGE__WAL_CAPACITY_MB=32
+      - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=2
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kumele_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # LibreTranslate / Argos Translate (optional - comment out to save RAM)
+  # argos:
+  #   image: libretranslate/libretranslate:latest
+  #   container_name: kumele_argos
+  #   environment:
+  #     - LT_LOAD_ONLY=en,es,fr
+  #     - LT_DISABLE_WEB_UI=true
+  #   ports:
+  #     - "5000:5000"
+  #   networks:
+  #     - kumele_network
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 512M
+
+  # FastAPI Application
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: kumele_api
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - API_KEY=${API_KEY:-internal-api-key}
+      - DATABASE_URL=postgresql://kumele:${POSTGRES_PASSWORD:-kumele}@postgres:5432/kumele_ai
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      # Translation - disabled by default to save RAM
+      - TRANSLATE_URL=${TRANSLATE_URL:-}
+      # LLM Configuration - Use OpenRouter by default in dev mode
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - LLM_API_URL=${LLM_API_URL:-http://mistral:80}
+      - LLM_MODEL=${LLM_MODEL:-mistralai/Mistral-7B-Instruct-v0.2}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_API_URL=${OPENROUTER_API_URL:-https://openrouter.ai/api/v1}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct}
+      - OPENROUTER_SITE_URL=${OPENROUTER_SITE_URL:-https://kumele.ai}
+      - OPENROUTER_SITE_NAME=${OPENROUTER_SITE_NAME:-Kumele}
+      # Celery
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./kumele_ai:/app/kumele_ai
+      - model_cache:/root/.cache
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ai/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kumele_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # Celery Worker
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: kumele_worker
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DATABASE_URL=postgresql://kumele:${POSTGRES_PASSWORD:-kumele}@postgres:5432/kumele_ai
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - TRANSLATE_URL=${TRANSLATE_URL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - LLM_API_URL=${LLM_API_URL:-http://mistral:80}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_API_URL=${OPENROUTER_API_URL:-https://openrouter.ai/api/v1}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-mistralai/mistral-7b-instruct}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./kumele_ai:/app/kumele_ai
+      - model_cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - kumele_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  model_cache:
+
+networks:
+  kumele_network:
+    driver: bridge
