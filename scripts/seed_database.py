@@ -1045,17 +1045,30 @@ def seed_database(
             "When does it start?",
         ]
         
+        moderation_reasons = [
+            "Manual approval by moderator",
+            "Auto-approved by AI",
+            "Flagged for review: potential spam",
+            "Flagged for review: language filter",
+            "Contains promotional content",
+            None  # Most messages have no reason
+        ]
+        
         for chat in temp_chats:
             num_messages = random.randint(3, 20)
             chat_users = random.sample(users, min(5, len(users)))
             
             for _ in range(num_messages):
+                is_moderated = random.random() < 0.1
+                mod_status = random.choice(["approved", "approved", "flagged"]) if is_moderated else "approved"
+                
                 msg = models.TempChatMessage(
                     chat_id=chat.id,
                     user_id=random.choice(chat_users).id,
                     content=random.choice(sample_messages),
-                    is_moderated=random.random() < 0.1,
-                    moderation_status=random.choice(["approved", "approved", "flagged"]) if random.random() < 0.1 else "approved",
+                    is_moderated=is_moderated,
+                    moderation_status=mod_status,
+                    moderation_reason=random.choice(moderation_reasons) if is_moderated else None,
                     toxicity_score=random.uniform(0.0, 0.3),
                     is_deleted=False,
                 )
