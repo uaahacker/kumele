@@ -22,7 +22,7 @@ from kumele_ai.db.models import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/ai-ops", tags=["ai-ops"])
+router = APIRouter(prefix="/ai-ops", tags=["AI-Ops"])
 
 
 # ============================================================

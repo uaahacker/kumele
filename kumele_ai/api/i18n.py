@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from kumele_ai.db.database import get_db
 from kumele_ai.services.i18n_service import i18n_service
 
-router = APIRouter(prefix="/i18n", tags=["i18n"])
+router = APIRouter(prefix="/i18n", tags=["Internationalization"])
 
 
 class StringsResponse(BaseModel):

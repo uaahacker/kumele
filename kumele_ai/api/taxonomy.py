@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from kumele_ai.db.database import get_db
 from kumele_ai.services.taxonomy_service import taxonomy_service
 
-router = APIRouter(prefix="/taxonomy", tags=["taxonomy"])
+router = APIRouter(prefix="/taxonomy", tags=["Taxonomy"])
 
 
 class InterestResponse(BaseModel):

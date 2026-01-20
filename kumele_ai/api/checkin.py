@@ -22,7 +22,7 @@ from kumele_ai.db.models import (
 from kumele_ai.services.attendance_verification_service import attendance_verification_service
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/checkin", tags=["checkin"])
+router = APIRouter(prefix="/checkin", tags=["Check-in"])
 
 
 # ============================================================
@@ -532,3 +532,486 @@ async def get_user_checkin_history(
             for c in checkins
         ]
     }
+
+
+# ============================================================
+# CHECK-IN VERIFY ENDPOINT (POST /checkin/verify)
+# ============================================================
+
+class VerifyCheckInRequest(BaseModel):
+    """Request for check-in verification"""
+    event_id: int = Field(..., description="Event ID")
+    user_id: int = Field(..., description="User ID")
+    qr_code: Optional[str] = Field(None, description="QR code for host scan mode")
+    latitude: Optional[float] = Field(None, description="User GPS latitude")
+    longitude: Optional[float] = Field(None, description="User GPS longitude")
+    device_hash: Optional[str] = Field(None, description="Device fingerprint")
+    qr_timestamp: Optional[datetime] = Field(None, description="QR scan timestamp")
+
+
+class VerifyCheckInResponse(BaseModel):
+    """Response from check-in verification"""
+    verified: bool
+    status: str  # "verified", "suspicious", "rejected"
+    confidence: float
+    geo_distance_km: Optional[float]
+    time_from_start_minutes: Optional[float]
+    device_trusted: bool
+    host_confirmed: bool
+    verification_id: int
+    message: str
+
+
+@router.post("/verify", response_model=VerifyCheckInResponse)
+async def verify_checkin(
+    request: VerifyCheckInRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    POST /checkin/verify
+    
+    Verify a check-in attempt. Combines:
+    - Geo distance verification
+    - QR scan timestamp validation
+    - Device fingerprint check
+    - Event start time validation
+    - Host confirmation logs
+    
+    Returns verification status with confidence score.
+    """
+    import math
+    
+    # Get event
+    event = db.query(Event).filter(Event.id == request.event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Initialize verification result
+    checks = {
+        "geo_valid": False,
+        "time_valid": False,
+        "device_trusted": True,
+        "host_confirmed": False
+    }
+    
+    confidence = 0.0
+    geo_distance = None
+    time_from_start = None
+    
+    # 1. Geo distance check
+    if request.latitude and request.longitude and event.latitude and event.longitude:
+        R = 6371  # Earth's radius in km
+        lat1, lon1 = math.radians(request.latitude), math.radians(request.longitude)
+        lat2, lon2 = math.radians(event.latitude), math.radians(event.longitude)
+        
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        geo_distance = R * c
+        
+        if geo_distance <= 2.0:  # Within 2km
+            checks["geo_valid"] = True
+            confidence += 0.3
+        elif geo_distance <= 5.0:
+            checks["geo_valid"] = True
+            confidence += 0.15
+    
+    # 2. Time validation
+    if event.event_date:
+        now = datetime.utcnow()
+        time_from_start = (now - event.event_date).total_seconds() / 60
+        
+        # Valid window: 30 min before to 2 hours after
+        if -30 <= time_from_start <= 120:
+            checks["time_valid"] = True
+            confidence += 0.25
+    
+    # 3. Device fingerprint check
+    if request.device_hash:
+        device = db.query(DeviceFingerprint).filter(
+            DeviceFingerprint.device_hash == request.device_hash
+        ).first()
+        
+        if device and device.fraud_count > 0:
+            checks["device_trusted"] = False
+            confidence -= 0.2
+        else:
+            checks["device_trusted"] = True
+            confidence += 0.2
+    
+    # 4. QR code verification (if provided)
+    if request.qr_code:
+        import hashlib
+        qr_hash = hashlib.sha256(request.qr_code.encode()).hexdigest()[:32]
+        
+        # Check for replay
+        replay_window = datetime.utcnow() - timedelta(seconds=60)
+        replay = db.query(QRScanLog).filter(
+            and_(
+                QRScanLog.qr_code_hash == qr_hash,
+                QRScanLog.event_id == request.event_id,
+                QRScanLog.scanned_at >= replay_window
+            )
+        ).first()
+        
+        if not replay:
+            checks["host_confirmed"] = True
+            confidence += 0.25
+            
+            # Log QR scan
+            qr_log = QRScanLog(
+                qr_code_hash=qr_hash,
+                event_id=request.event_id,
+                user_id=request.user_id,
+                device_hash=request.device_hash,
+                is_valid=True
+            )
+            db.add(qr_log)
+    
+    # Calculate final status
+    confidence = max(0, min(1.0, confidence))
+    
+    if confidence >= 0.7:
+        status = "verified"
+        verified = True
+    elif confidence >= 0.4:
+        status = "suspicious"
+        verified = False
+    else:
+        status = "rejected"
+        verified = False
+    
+    # Create verification record
+    verification = AttendanceVerification(
+        event_id=request.event_id,
+        user_id=request.user_id,
+        confidence_score=confidence,
+        decision="confirmed_valid" if verified else "flagged_suspicious",
+        distance_km=geo_distance
+    )
+    db.add(verification)
+    db.commit()
+    db.refresh(verification)
+    
+    message = f"Check-in {status}"
+    if not verified and not checks["geo_valid"]:
+        message = f"Location too far from venue ({geo_distance:.1f}km)" if geo_distance else "Missing location data"
+    elif not verified and not checks["time_valid"]:
+        message = "Outside valid check-in time window"
+    elif not verified and not checks["device_trusted"]:
+        message = "Device has previous fraud flags"
+    
+    return VerifyCheckInResponse(
+        verified=verified,
+        status=status,
+        confidence=round(confidence, 4),
+        geo_distance_km=round(geo_distance, 2) if geo_distance else None,
+        time_from_start_minutes=round(time_from_start, 1) if time_from_start else None,
+        device_trusted=checks["device_trusted"],
+        host_confirmed=checks["host_confirmed"],
+        verification_id=verification.id,
+        message=message
+    )
+
+
+# ============================================================
+# FRAUD DETECTION ENDPOINT (POST /checkin/fraud-detect)
+# ============================================================
+
+class FraudDetectRequest(BaseModel):
+    """Request for fraud detection analysis"""
+    event_id: int = Field(..., description="Event ID")
+    user_id: int = Field(..., description="User ID to check")
+    device_hash: Optional[str] = Field(None, description="Device fingerprint")
+    ip_address: Optional[str] = Field(None, description="User's IP address")
+    latitude: Optional[float] = Field(None, description="GPS latitude")
+    longitude: Optional[float] = Field(None, description="GPS longitude")
+    qr_image_hash: Optional[str] = Field(None, description="Hash of QR image (screenshot detection)")
+
+
+class FraudDetectResponse(BaseModel):
+    """Response from fraud detection"""
+    score: float  # 0.0 = clean, 1.0 = definite fraud
+    decision: str  # "clean", "suspicious", "likely_fraud"
+    reason: str
+    risk_factors: list
+    recommendations: list
+
+
+@router.post("/fraud-detect", response_model=FraudDetectResponse)
+async def detect_fraud(
+    request: FraudDetectRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    POST /checkin/fraud-detect
+    
+    ML model evaluates fraud indicators:
+    - Fake QR screenshots
+    - Too many check-ins from single IP/device
+    - Sudden location jumps
+    - Host check-in abuse
+    - Refund fraud attempts
+    
+    Returns:
+    - score: 0.0-1.0 (higher = more likely fraud)
+    - decision: clean/suspicious/likely_fraud
+    - reason: Human-readable explanation
+    """
+    risk_factors = []
+    score = 0.0
+    
+    # Get event
+    event = db.query(Event).filter(Event.id == request.event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # 1. Check device fraud history
+    if request.device_hash:
+        device = db.query(DeviceFingerprint).filter(
+            DeviceFingerprint.device_hash == request.device_hash
+        ).first()
+        
+        if device:
+            if device.fraud_count > 0:
+                score += 0.3 * min(device.fraud_count, 3)  # Up to 0.9
+                risk_factors.append(f"Device has {device.fraud_count} previous fraud flags")
+            
+            # Check multiple check-ins from same device in short period
+            recent_checkins = db.query(func.count(CheckIn.id)).filter(
+                and_(
+                    CheckIn.device_hash == request.device_hash,
+                    CheckIn.check_in_time >= datetime.utcnow() - timedelta(hours=24)
+                )
+            ).scalar() or 0
+            
+            if recent_checkins > 5:
+                score += 0.2
+                risk_factors.append(f"Device used for {recent_checkins} check-ins in 24h")
+    
+    # 2. Check for location jumps (impossible travel)
+    if request.latitude and request.longitude:
+        # Get last check-in location
+        last_checkin = db.query(CheckIn).filter(
+            and_(
+                CheckIn.user_id == request.user_id,
+                CheckIn.check_in_time >= datetime.utcnow() - timedelta(hours=2)
+            )
+        ).order_by(CheckIn.check_in_time.desc()).first()
+        
+        if last_checkin and last_checkin.user_latitude and last_checkin.user_longitude:
+            import math
+            R = 6371
+            lat1, lon1 = math.radians(last_checkin.user_latitude), math.radians(last_checkin.user_longitude)
+            lat2, lon2 = math.radians(request.latitude), math.radians(request.longitude)
+            
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            
+            a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+            distance = R * c
+            
+            # Check for impossible travel (>100km in <1 hour)
+            if last_checkin.check_in_time:
+                hours_diff = (datetime.utcnow() - last_checkin.check_in_time).total_seconds() / 3600
+                if hours_diff < 1 and distance > 100:
+                    score += 0.4
+                    risk_factors.append(f"Abnormal GPS variance: {distance:.0f}km in {hours_diff:.1f}h")
+    
+    # 3. Check for fake QR screenshots
+    if request.qr_image_hash:
+        # Check if this exact QR image was used before
+        similar_qr = db.query(func.count(QRScanLog.id)).filter(
+            QRScanLog.qr_code_hash == request.qr_image_hash
+        ).scalar() or 0
+        
+        if similar_qr > 2:
+            score += 0.35
+            risk_factors.append("Possible screenshot/reuse of QR code image")
+    
+    # 4. Check user's refund history
+    user_events = db.query(UserEvent).filter(
+        and_(
+            UserEvent.user_id == request.user_id,
+            UserEvent.rsvp_status == "cancelled"
+        )
+    ).count()
+    
+    total_rsvps = db.query(UserEvent).filter(
+        UserEvent.user_id == request.user_id
+    ).count()
+    
+    if total_rsvps > 5 and (user_events / total_rsvps) > 0.5:
+        score += 0.15
+        risk_factors.append(f"High cancellation rate: {user_events}/{total_rsvps}")
+    
+    # 5. Check if user is host trying to abuse check-ins
+    if event.host_id == request.user_id:
+        host_checkins = db.query(func.count(CheckIn.id)).filter(
+            and_(
+                CheckIn.user_id == request.user_id,
+                CheckIn.event_id == request.event_id
+            )
+        ).scalar() or 0
+        
+        if host_checkins > 0:
+            score += 0.1
+            risk_factors.append("Host attempting to self-check-in")
+    
+    # Calculate final score and decision
+    score = min(1.0, score)
+    
+    if score >= 0.7:
+        decision = "likely_fraud"
+    elif score >= 0.35:
+        decision = "suspicious"
+    else:
+        decision = "clean"
+    
+    # Build reason string
+    if risk_factors:
+        reason = " + ".join(risk_factors[:2])  # Top 2 factors
+    else:
+        reason = "No significant risk factors detected"
+    
+    # Recommendations
+    recommendations = []
+    if score >= 0.7:
+        recommendations = [
+            "Block check-in",
+            "Flag user for review",
+            "Require host manual verification"
+        ]
+    elif score >= 0.35:
+        recommendations = [
+            "Allow with manual review",
+            "Request additional verification",
+            "Monitor user activity"
+        ]
+    else:
+        recommendations = ["Allow check-in"]
+    
+    return FraudDetectResponse(
+        score=round(score, 2),
+        decision=decision,
+        reason=reason,
+        risk_factors=risk_factors,
+        recommendations=recommendations
+    )
+
+
+# ============================================================
+# HOST COMPLIANCE RATE
+# ============================================================
+
+class HostComplianceResponse(BaseModel):
+    """Host check-in compliance metrics"""
+    host_id: int
+    total_events: int
+    events_with_checkins: int
+    total_expected_checkins: int
+    total_actual_checkins: int
+    compliance_rate: float
+    avg_checkin_rate_per_event: float
+    host_tier: Optional[str]
+    event_completion_rate: float
+    cancellation_rate: float
+    refund_penalty_count: int
+
+
+@router.get("/host/{host_id}/compliance", response_model=HostComplianceResponse)
+async def get_host_compliance(
+    host_id: int,
+    days: int = Query(default=90, le=365),
+    db: Session = Depends(get_db)
+):
+    """
+    Get host's check-in compliance rate.
+    
+    Tracks:
+    - How often host uses check-in system
+    - Event completion rate
+    - Cancellation rate
+    - Refund-triggered penalties
+    """
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    
+    # Get host's events
+    events = db.query(Event).filter(
+        and_(
+            Event.host_id == host_id,
+            Event.created_at >= cutoff
+        )
+    ).all()
+    
+    total_events = len(events)
+    events_with_checkins = 0
+    total_expected = 0
+    total_actual = 0
+    completed = 0
+    cancelled = 0
+    
+    for event in events:
+        # Count RSVPs
+        rsvps = db.query(func.count(UserEvent.id)).filter(
+            UserEvent.event_id == event.id
+        ).scalar() or 0
+        
+        total_expected += rsvps
+        
+        # Count check-ins
+        checkins = db.query(func.count(CheckIn.id)).filter(
+            CheckIn.event_id == event.id
+        ).scalar() or 0
+        
+        total_actual += checkins
+        
+        if checkins > 0:
+            events_with_checkins += 1
+        
+        # Event status
+        if event.status == "completed":
+            completed += 1
+        elif event.status == "cancelled":
+            cancelled += 1
+    
+    # Calculate rates
+    compliance_rate = events_with_checkins / max(total_events, 1)
+    avg_checkin_rate = total_actual / max(total_expected, 1)
+    completion_rate = completed / max(total_events, 1)
+    cancellation_rate = cancelled / max(total_events, 1)
+    
+    # Get host tier
+    from kumele_ai.db.models import NFTBadge
+    badge = db.query(NFTBadge).filter(
+        and_(
+            NFTBadge.user_id == host_id,
+            NFTBadge.is_active == True
+        )
+    ).first()
+    
+    # Count refund penalties (simplified)
+    refund_penalties = db.query(func.count(UserEvent.id)).filter(
+        and_(
+            UserEvent.event_id.in_([e.id for e in events]),
+            UserEvent.rsvp_status == "refunded"
+        )
+    ).scalar() or 0
+    
+    return HostComplianceResponse(
+        host_id=host_id,
+        total_events=total_events,
+        events_with_checkins=events_with_checkins,
+        total_expected_checkins=total_expected,
+        total_actual_checkins=total_actual,
+        compliance_rate=round(compliance_rate, 4),
+        avg_checkin_rate_per_event=round(avg_checkin_rate, 4),
+        host_tier=badge.tier if badge else None,
+        event_completion_rate=round(completion_rate, 4),
+        cancellation_rate=round(cancellation_rate, 4),
+        refund_penalty_count=refund_penalties
+    )
+

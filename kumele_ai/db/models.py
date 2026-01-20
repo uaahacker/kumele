@@ -961,6 +961,7 @@ class TempChatMessage(Base):
     # Moderation
     is_moderated = Column(Boolean, default=False)
     moderation_status = Column(String(50))  # approved, flagged, removed
+    moderation_reason = Column(Text)  # Reason for moderation action
     toxicity_score = Column(Float)
     
     # Metadata

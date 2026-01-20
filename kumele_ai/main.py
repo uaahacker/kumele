@@ -27,7 +27,10 @@ from kumele_ai.api import (
     taxonomy,
     i18n,
     checkin,
-    ai_ops
+    ai_ops,
+    chat,
+    payment,
+    nft
 )
 from kumele_ai.models.registry import model_registry
 
@@ -90,11 +93,14 @@ app.include_router(nlp.router, prefix="/nlp", tags=["NLP"])
 app.include_router(moderation.router, prefix="/moderation", tags=["Moderation"])
 app.include_router(pricing.router, prefix="/pricing", tags=["Pricing"])
 app.include_router(discount.router, prefix="/discount", tags=["Discount"])
-app.include_router(taxonomy.router, tags=["Taxonomy"])
-app.include_router(i18n.router, tags=["i18n"])
-# NEW: Check-in and AI Ops routers
-app.include_router(checkin.router, tags=["Check-in"])
-app.include_router(ai_ops.router, tags=["AI-Ops"])
+# Routers with internal prefixes - don't add prefix here to avoid duplicates
+app.include_router(taxonomy.router)
+app.include_router(i18n.router)
+app.include_router(checkin.router)
+app.include_router(ai_ops.router)
+app.include_router(chat.router)
+app.include_router(payment.router)
+app.include_router(nft.router)
 
 
 @app.get("/")
