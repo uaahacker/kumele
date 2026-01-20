@@ -18,14 +18,31 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import text
-
 try:
+    from sqlalchemy import text
     from kumele_ai.db.database import engine
 except ImportError:
     print("Error: Could not import database engine.")
     print("Make sure you're running from the project root with dependencies installed.")
     sys.exit(1)
+
+
+def run_sql(conn, name, sql):
+    """Execute SQL and handle errors"""
+    try:
+        conn.execute(text(sql))
+        conn.commit()
+        print(f"  ✓ {name}")
+        return True
+    except Exception as e:
+        conn.rollback()
+        err_str = str(e).lower()
+        if "already exists" in err_str:
+            print(f"  ⏭ {name} (already exists)")
+            return True
+        else:
+            print(f"  ✗ {name}: {e}")
+            return False
 
 
 def create_tables():
@@ -34,12 +51,12 @@ def create_tables():
     print("Creating New AI/ML Tables")
     print("=" * 60)
     
-    # Each statement is separate for proper execution
-    statements = [
+    with engine.connect() as conn:
+        
         # ============================================================
-        # CHECK-IN SYSTEM
+        # 1. CHECKINS TABLE
         # ============================================================
-        ("checkins table", """
+        run_sql(conn, "checkins table", """
             CREATE TABLE IF NOT EXISTS checkins (
                 id SERIAL PRIMARY KEY,
                 event_id INTEGER NOT NULL REFERENCES events(id),
@@ -61,19 +78,18 @@ def create_tables():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT unique_event_user_checkin UNIQUE (event_id, user_id)
             )
-        """),
-        ("checkins indexes", """
-            CREATE INDEX IF NOT EXISTS idx_checkin_event ON checkins(event_id);
-            CREATE INDEX IF NOT EXISTS idx_checkin_user ON checkins(user_id);
-            CREATE INDEX IF NOT EXISTS idx_checkin_valid ON checkins(is_valid);
-            CREATE INDEX IF NOT EXISTS idx_checkin_mode ON checkins(mode);
-            CREATE INDEX IF NOT EXISTS idx_checkin_risk ON checkins(risk_score)
-        """),
+        """)
+        
+        run_sql(conn, "idx_checkin_event", "CREATE INDEX IF NOT EXISTS idx_checkin_event ON checkins(event_id)")
+        run_sql(conn, "idx_checkin_user", "CREATE INDEX IF NOT EXISTS idx_checkin_user ON checkins(user_id)")
+        run_sql(conn, "idx_checkin_valid", "CREATE INDEX IF NOT EXISTS idx_checkin_valid ON checkins(is_valid)")
+        run_sql(conn, "idx_checkin_mode", "CREATE INDEX IF NOT EXISTS idx_checkin_mode ON checkins(mode)")
+        run_sql(conn, "idx_checkin_risk", "CREATE INDEX IF NOT EXISTS idx_checkin_risk ON checkins(risk_score)")
         
         # ============================================================
-        # NFT BADGE SYSTEM
+        # 2. NFT BADGES TABLE
         # ============================================================
-        ("nft_badges table", """
+        run_sql(conn, "nft_badges table", """
             CREATE TABLE IF NOT EXISTS nft_badges (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -92,13 +108,16 @@ def create_tables():
                 revoked_at TIMESTAMP,
                 revoked_reason VARCHAR(255)
             )
-        """),
-        ("nft_badges indexes", """
-            CREATE INDEX IF NOT EXISTS idx_nft_badge_user ON nft_badges(user_id);
-            CREATE INDEX IF NOT EXISTS idx_nft_badge_type ON nft_badges(badge_type);
-            CREATE INDEX IF NOT EXISTS idx_nft_badge_active ON nft_badges(is_active)
-        """),
-        ("nft_badge_history table", """
+        """)
+        
+        run_sql(conn, "idx_nft_badge_user", "CREATE INDEX IF NOT EXISTS idx_nft_badge_user ON nft_badges(user_id)")
+        run_sql(conn, "idx_nft_badge_type", "CREATE INDEX IF NOT EXISTS idx_nft_badge_type ON nft_badges(badge_type)")
+        run_sql(conn, "idx_nft_badge_active", "CREATE INDEX IF NOT EXISTS idx_nft_badge_active ON nft_badges(is_active)")
+        
+        # ============================================================
+        # 3. NFT BADGE HISTORY TABLE
+        # ============================================================
+        run_sql(conn, "nft_badge_history table", """
             CREATE TABLE IF NOT EXISTS nft_badge_history (
                 id SERIAL PRIMARY KEY,
                 badge_id INTEGER NOT NULL REFERENCES nft_badges(id),
@@ -111,12 +130,12 @@ def create_tables():
                 reason VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """),
+        """)
         
         # ============================================================
-        # TEMP CHAT SYSTEM
+        # 4. TEMP CHATS TABLE
         # ============================================================
-        ("temp_chats table", """
+        run_sql(conn, "temp_chats table", """
             CREATE TABLE IF NOT EXISTS temp_chats (
                 id SERIAL PRIMARY KEY,
                 event_id INTEGER NOT NULL REFERENCES events(id),
@@ -134,13 +153,16 @@ def create_tables():
                 moderation_flags INTEGER DEFAULT 0,
                 is_suspended BOOLEAN DEFAULT FALSE
             )
-        """),
-        ("temp_chats indexes", """
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_event ON temp_chats(event_id);
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_status ON temp_chats(status);
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_expires ON temp_chats(expires_at)
-        """),
-        ("temp_chat_messages table", """
+        """)
+        
+        run_sql(conn, "idx_temp_chat_event", "CREATE INDEX IF NOT EXISTS idx_temp_chat_event ON temp_chats(event_id)")
+        run_sql(conn, "idx_temp_chat_status", "CREATE INDEX IF NOT EXISTS idx_temp_chat_status ON temp_chats(status)")
+        run_sql(conn, "idx_temp_chat_expires", "CREATE INDEX IF NOT EXISTS idx_temp_chat_expires ON temp_chats(expires_at)")
+        
+        # ============================================================
+        # 5. TEMP CHAT MESSAGES TABLE
+        # ============================================================
+        run_sql(conn, "temp_chat_messages table", """
             CREATE TABLE IF NOT EXISTS temp_chat_messages (
                 id SERIAL PRIMARY KEY,
                 chat_id INTEGER NOT NULL REFERENCES temp_chats(id),
@@ -153,13 +175,16 @@ def create_tables():
                 edited_at TIMESTAMP,
                 is_deleted BOOLEAN DEFAULT FALSE
             )
-        """),
-        ("temp_chat_messages indexes", """
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_msg_chat ON temp_chat_messages(chat_id);
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_msg_user ON temp_chat_messages(user_id);
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_msg_moderated ON temp_chat_messages(is_moderated)
-        """),
-        ("temp_chat_participants table", """
+        """)
+        
+        run_sql(conn, "idx_temp_chat_msg_chat", "CREATE INDEX IF NOT EXISTS idx_temp_chat_msg_chat ON temp_chat_messages(chat_id)")
+        run_sql(conn, "idx_temp_chat_msg_user", "CREATE INDEX IF NOT EXISTS idx_temp_chat_msg_user ON temp_chat_messages(user_id)")
+        run_sql(conn, "idx_temp_chat_msg_moderated", "CREATE INDEX IF NOT EXISTS idx_temp_chat_msg_moderated ON temp_chat_messages(is_moderated)")
+        
+        # ============================================================
+        # 6. TEMP CHAT PARTICIPANTS TABLE
+        # ============================================================
+        run_sql(conn, "temp_chat_participants table", """
             CREATE TABLE IF NOT EXISTS temp_chat_participants (
                 id SERIAL PRIMARY KEY,
                 chat_id INTEGER NOT NULL REFERENCES temp_chats(id),
@@ -172,16 +197,15 @@ def create_tables():
                 last_read_at TIMESTAMP,
                 CONSTRAINT unique_chat_participant UNIQUE (chat_id, user_id)
             )
-        """),
-        ("temp_chat_participants indexes", """
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_part_chat ON temp_chat_participants(chat_id);
-            CREATE INDEX IF NOT EXISTS idx_temp_chat_part_user ON temp_chat_participants(user_id)
-        """),
+        """)
+        
+        run_sql(conn, "idx_temp_chat_part_chat", "CREATE INDEX IF NOT EXISTS idx_temp_chat_part_chat ON temp_chat_participants(chat_id)")
+        run_sql(conn, "idx_temp_chat_part_user", "CREATE INDEX IF NOT EXISTS idx_temp_chat_part_user ON temp_chat_participants(user_id)")
         
         # ============================================================
-        # USER ML FEATURES
+        # 7. USER ML FEATURES TABLE
         # ============================================================
-        ("user_ml_features table", """
+        run_sql(conn, "user_ml_features table", """
             CREATE TABLE IF NOT EXISTS user_ml_features (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
@@ -209,18 +233,17 @@ def create_tables():
                 avg_rating_received FLOAT,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """),
-        ("user_ml_features indexes", """
-            CREATE INDEX IF NOT EXISTS idx_user_ml_features_user ON user_ml_features(user_id);
-            CREATE INDEX IF NOT EXISTS idx_user_ml_features_trust ON user_ml_features(trust_score);
-            CREATE INDEX IF NOT EXISTS idx_user_ml_features_tier ON user_ml_features(reward_tier);
-            CREATE INDEX IF NOT EXISTS idx_user_ml_features_nft ON user_ml_features(nft_badge_type)
-        """),
+        """)
+        
+        run_sql(conn, "idx_user_ml_features_user", "CREATE INDEX IF NOT EXISTS idx_user_ml_features_user ON user_ml_features(user_id)")
+        run_sql(conn, "idx_user_ml_features_trust", "CREATE INDEX IF NOT EXISTS idx_user_ml_features_trust ON user_ml_features(trust_score)")
+        run_sql(conn, "idx_user_ml_features_tier", "CREATE INDEX IF NOT EXISTS idx_user_ml_features_tier ON user_ml_features(reward_tier)")
+        run_sql(conn, "idx_user_ml_features_nft", "CREATE INDEX IF NOT EXISTS idx_user_ml_features_nft ON user_ml_features(nft_badge_type)")
         
         # ============================================================
-        # EVENT ML FEATURES
+        # 8. EVENT ML FEATURES TABLE
         # ============================================================
-        ("event_ml_features table", """
+        run_sql(conn, "event_ml_features table", """
             CREATE TABLE IF NOT EXISTS event_ml_features (
                 id SERIAL PRIMARY KEY,
                 event_id INTEGER NOT NULL UNIQUE REFERENCES events(id),
@@ -245,16 +268,15 @@ def create_tables():
                 is_weekend BOOLEAN DEFAULT FALSE,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """),
-        ("event_ml_features indexes", """
-            CREATE INDEX IF NOT EXISTS idx_event_ml_features_event ON event_ml_features(event_id);
-            CREATE INDEX IF NOT EXISTS idx_event_ml_features_host ON event_ml_features(host_id)
-        """),
+        """)
+        
+        run_sql(conn, "idx_event_ml_features_event", "CREATE INDEX IF NOT EXISTS idx_event_ml_features_event ON event_ml_features(event_id)")
+        run_sql(conn, "idx_event_ml_features_host", "CREATE INDEX IF NOT EXISTS idx_event_ml_features_host ON event_ml_features(host_id)")
         
         # ============================================================
-        # AI OPS MONITORING
+        # 9. AI METRICS TABLE
         # ============================================================
-        ("ai_metrics table", """
+        run_sql(conn, "ai_metrics table", """
             CREATE TABLE IF NOT EXISTS ai_metrics (
                 id SERIAL PRIMARY KEY,
                 metric_name VARCHAR(100) NOT NULL,
@@ -263,12 +285,15 @@ def create_tables():
                 labels JSONB,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """),
-        ("ai_metrics indexes", """
-            CREATE INDEX IF NOT EXISTS idx_ai_metrics_name ON ai_metrics(metric_name);
-            CREATE INDEX IF NOT EXISTS idx_ai_metrics_time ON ai_metrics(timestamp)
-        """),
-        ("model_drift_log table", """
+        """)
+        
+        run_sql(conn, "idx_ai_metrics_name", "CREATE INDEX IF NOT EXISTS idx_ai_metrics_name ON ai_metrics(metric_name)")
+        run_sql(conn, "idx_ai_metrics_time", "CREATE INDEX IF NOT EXISTS idx_ai_metrics_time ON ai_metrics(timestamp)")
+        
+        # ============================================================
+        # 10. MODEL DRIFT LOG TABLE
+        # ============================================================
+        run_sql(conn, "model_drift_log table", """
             CREATE TABLE IF NOT EXISTS model_drift_log (
                 id SERIAL PRIMARY KEY,
                 model_name VARCHAR(100) NOT NULL,
@@ -284,30 +309,15 @@ def create_tables():
                 sample_size INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """),
-        ("model_drift_log indexes", """
-            CREATE INDEX IF NOT EXISTS idx_model_drift_name ON model_drift_log(model_name);
-            CREATE INDEX IF NOT EXISTS idx_model_drift_detected ON model_drift_log(drift_detected)
-        """),
-    ]
-    
-    with engine.connect() as conn:
-        for name, sql in statements:
-            try:
-                conn.execute(text(sql))
-                conn.commit()
-                print(f"  ✓ Created: {name}")
-            except Exception as e:
-                conn.rollback()
-                if "already exists" in str(e).lower():
-                    print(f"  ⏭ Skipped (exists): {name}")
-                else:
-                    print(f"  ✗ Error on {name}: {e}")
+        """)
+        
+        run_sql(conn, "idx_model_drift_name", "CREATE INDEX IF NOT EXISTS idx_model_drift_name ON model_drift_log(model_name)")
+        run_sql(conn, "idx_model_drift_detected", "CREATE INDEX IF NOT EXISTS idx_model_drift_detected ON model_drift_log(drift_detected)")
     
     print("\n" + "=" * 60)
     print("Migration Complete!")
     print("=" * 60)
-    print("\nCreated tables:")
+    print("\nTables created:")
     print("  - checkins")
     print("  - nft_badges")
     print("  - nft_badge_history")
@@ -318,7 +328,7 @@ def create_tables():
     print("  - event_ml_features")
     print("  - ai_metrics")
     print("  - model_drift_log")
-    print("\nYou can now run the seed script:")
+    print("\nNow run the seed script:")
     print("  docker compose exec api python scripts/seed_database.py --clear")
 
 
