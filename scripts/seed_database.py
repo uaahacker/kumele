@@ -1154,11 +1154,13 @@ def seed_database(
         
         for event in events:
             host_badge = next((b for b in nft_badges if b.user_id == event.host_id), None)
+            event_capacity = event.capacity or random.randint(10, 100)
+            event_price = float(event.price) if event.price else None
             
             event_ml = models.EventMLFeatures(
                 event_id=event.id,
-                capacity=event.max_attendees or random.randint(10, 100),
-                current_rsvps=random.randint(0, event.max_attendees or 50),
+                capacity=event_capacity,
+                current_rsvps=random.randint(0, event_capacity),
                 capacity_filled_percent=random.uniform(0.2, 1.0),
                 host_id=event.host_id,
                 host_tier=random.choice(host_tiers),
@@ -1166,11 +1168,11 @@ def seed_database(
                 host_reliability_score=random.uniform(0.6, 1.0),
                 host_avg_rating=random.uniform(3.5, 5.0),
                 host_total_events=random.randint(1, 50),
-                is_paid=event.is_paid if hasattr(event, 'is_paid') else random.random() > 0.5,
-                price=float(event.ticket_price) if event.ticket_price else None,
-                price_mode=random.choice(["free", "paid", "pay_in_person"]),
-                dynamic_price_suggested=float(event.ticket_price) * random.uniform(0.8, 1.2) if event.ticket_price else None,
-                predicted_attendance=random.randint(5, event.max_attendees or 50),
+                is_paid=event.is_paid if event.is_paid else False,
+                price=event_price,
+                price_mode="paid" if event_price and event_price > 0 else "free",
+                dynamic_price_suggested=event_price * random.uniform(0.8, 1.2) if event_price else None,
+                predicted_attendance=random.randint(5, event_capacity),
                 predicted_no_show_rate=random.uniform(0.05, 0.25),
                 verified_attendance_required=random.random() > 0.3,
                 hours_until_event=random.uniform(-48, 168),
