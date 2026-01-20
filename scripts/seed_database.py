@@ -249,7 +249,7 @@ def seed_database(
             ]
             for table in tables_to_clear:
                 try:
-                    db.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
+                    db.execute(text(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE"))
                 except Exception as e:
                     pass  # Table might not exist
             db.commit()
