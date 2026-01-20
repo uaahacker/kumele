@@ -800,3 +800,355 @@ class QRScanLog(Base):
         Index('idx_qr_scan_event', 'event_id'),
         Index('idx_qr_scan_time', 'scanned_at'),
     )
+
+
+# ============================================================
+# CHECK-IN SYSTEM - Attendance Tracking
+# ============================================================
+
+class CheckIn(Base):
+    """
+    Check-in records for event attendance verification.
+    
+    Supports:
+    - host_qr: Host scans attendee QR code
+    - self_check: User self-checks via geo-location
+    """
+    __tablename__ = "checkins"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("events.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    mode = Column(String(20), nullable=False)  # host_qr, self_check
+    is_valid = Column(Boolean, default=False)
+    distance_km = Column(Float)
+    risk_score = Column(Float, default=0.0)
+    reason_code = Column(String(100))  # success, gps_mismatch, time_window_expired, etc.
+    
+    # Verification details
+    user_latitude = Column(Float)
+    user_longitude = Column(Float)
+    qr_code_hash = Column(String(255))
+    device_hash = Column(String(255))
+    host_confirmed = Column(Boolean, default=False)
+    
+    # Timestamps
+    check_in_time = Column(DateTime, server_default=func.now())
+    event_start_time = Column(DateTime)
+    minutes_from_start = Column(Float)
+    
+    # Audit
+    verification_id = Column(Integer, ForeignKey("attendance_verifications.id"))
+    created_at = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        UniqueConstraint('event_id', 'user_id', name='unique_event_user_checkin'),
+        Index('idx_checkin_event', 'event_id'),
+        Index('idx_checkin_user', 'user_id'),
+        Index('idx_checkin_valid', 'is_valid'),
+        Index('idx_checkin_mode', 'mode'),
+        Index('idx_checkin_risk', 'risk_score'),
+    )
+
+
+# ============================================================
+# NFT BADGE SYSTEM - Trust & Reputation via Web3
+# ============================================================
+
+class NFTBadge(Base):
+    """NFT Badge registry for user trust and reputation"""
+    __tablename__ = "nft_badges"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    badge_type = Column(String(50), nullable=False)  # Bronze, Silver, Gold, Platinum, Legendary
+    token_id = Column(String(255), unique=True)  # NFT token ID on blockchain
+    contract_address = Column(String(255))
+    chain = Column(String(50), default="polygon")  # ethereum, polygon, etc.
+    
+    # Badge metadata
+    earned_at = Column(DateTime, server_default=func.now())
+    earned_reason = Column(String(255))  # attendance_milestone, host_excellence, etc.
+    experience_points = Column(Integer, default=0)
+    level = Column(Integer, default=1)
+    
+    # Trust influence
+    trust_boost = Column(Float, default=0.0)  # Added to trust score
+    price_discount_percent = Column(Float, default=0.0)
+    priority_matching = Column(Boolean, default=False)
+    
+    # Status
+    is_active = Column(Boolean, default=True)
+    revoked_at = Column(DateTime)
+    revoked_reason = Column(String(255))
+    
+    __table_args__ = (
+        Index('idx_nft_badge_user', 'user_id'),
+        Index('idx_nft_badge_type', 'badge_type'),
+        Index('idx_nft_badge_active', 'is_active'),
+    )
+
+
+class NFTBadgeHistory(Base):
+    """History of NFT badge changes for audit"""
+    __tablename__ = "nft_badge_history"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    badge_id = Column(Integer, ForeignKey("nft_badges.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    action = Column(String(50), nullable=False)  # minted, upgraded, revoked, transferred
+    old_level = Column(Integer)
+    new_level = Column(Integer)
+    old_xp = Column(Integer)
+    new_xp = Column(Integer)
+    reason = Column(String(255))
+    created_at = Column(DateTime, server_default=func.now())
+
+
+# ============================================================
+# TEMPORARY CHAT SYSTEM - Post-Match Communication
+# ============================================================
+
+class TempChat(Base):
+    """
+    Temporary event chat rooms.
+    
+    Lifecycle:
+    - Created: After successful match/RSVP
+    - Active: During event + 24 hours
+    - Expired: Auto-closed after 24h post-event
+    """
+    __tablename__ = "temp_chats"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("events.id"), nullable=False)
+    chat_type = Column(String(50), default="event")  # event, match, host_attendee
+    
+    # Lifecycle
+    status = Column(String(50), default="active")  # active, expired, closed, suspended
+    created_at = Column(DateTime, server_default=func.now())
+    expires_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime)
+    close_reason = Column(String(100))  # expired, manual, inactivity, moderation
+    
+    # Activity metrics (for ML)
+    message_count = Column(Integer, default=0)
+    active_participants = Column(Integer, default=0)
+    last_message_at = Column(DateTime)
+    avg_messages_per_hour = Column(Float, default=0.0)
+    
+    # Moderation
+    toxic_message_count = Column(Integer, default=0)
+    moderation_flags = Column(Integer, default=0)
+    is_suspended = Column(Boolean, default=False)
+    
+    __table_args__ = (
+        Index('idx_temp_chat_event', 'event_id'),
+        Index('idx_temp_chat_status', 'status'),
+        Index('idx_temp_chat_expires', 'expires_at'),
+    )
+
+
+class TempChatMessage(Base):
+    """Messages in temporary chats"""
+    __tablename__ = "temp_chat_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(Integer, ForeignKey("temp_chats.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    
+    # Moderation
+    is_moderated = Column(Boolean, default=False)
+    moderation_status = Column(String(50))  # approved, flagged, removed
+    toxicity_score = Column(Float)
+    
+    # Metadata
+    created_at = Column(DateTime, server_default=func.now())
+    edited_at = Column(DateTime)
+    is_deleted = Column(Boolean, default=False)
+    
+    __table_args__ = (
+        Index('idx_temp_chat_msg_chat', 'chat_id'),
+        Index('idx_temp_chat_msg_user', 'user_id'),
+        Index('idx_temp_chat_msg_moderated', 'is_moderated'),
+    )
+
+
+class TempChatParticipant(Base):
+    """Participants in temporary chats"""
+    __tablename__ = "temp_chat_participants"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(Integer, ForeignKey("temp_chats.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role = Column(String(50), default="attendee")  # host, attendee
+    joined_at = Column(DateTime, server_default=func.now())
+    left_at = Column(DateTime)
+    is_active = Column(Boolean, default=True)
+    message_count = Column(Integer, default=0)
+    last_read_at = Column(DateTime)
+    
+    __table_args__ = (
+        UniqueConstraint('chat_id', 'user_id', name='unique_chat_participant'),
+        Index('idx_temp_chat_part_chat', 'chat_id'),
+        Index('idx_temp_chat_part_user', 'user_id'),
+    )
+
+
+# ============================================================
+# ENHANCED USER ML FEATURES
+# ============================================================
+
+class UserMLFeatures(Base):
+    """
+    Pre-computed ML features for users.
+    Updated periodically by background workers.
+    """
+    __tablename__ = "user_ml_features"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    
+    # Attendance features (30/90 day windows)
+    verified_attendance_30d = Column(Integer, default=0)
+    verified_attendance_90d = Column(Integer, default=0)
+    attendance_rate_30d = Column(Float, default=0.0)
+    attendance_rate_90d = Column(Float, default=0.0)
+    no_show_rate_30d = Column(Float, default=0.0)
+    no_show_rate_90d = Column(Float, default=0.0)
+    
+    # Reward status
+    reward_tier = Column(String(20), default="None")  # None, Bronze, Silver, Gold
+    total_rewards_earned = Column(Integer, default=0)
+    coupons_available = Column(Integer, default=0)
+    
+    # NFT Badge
+    nft_badge_type = Column(String(50))  # Bronze, Silver, Gold, Platinum, Legendary
+    nft_badge_level = Column(Integer, default=0)
+    nft_trust_boost = Column(Float, default=0.0)
+    
+    # Payment behavior
+    payment_method_mix = Column(JSONB)  # {"stripe": 0.6, "paypal": 0.3, "web3": 0.1}
+    avg_payment_time_minutes = Column(Float)
+    payment_timeout_rate = Column(Float, default=0.0)
+    payment_failure_rate = Column(Float, default=0.0)
+    
+    # Trust signals
+    trust_score = Column(Float, default=1.0)
+    fraud_flag_count = Column(Integer, default=0)
+    
+    # Activity
+    events_attended_total = Column(Integer, default=0)
+    events_hosted_total = Column(Integer, default=0)
+    avg_rating_given = Column(Float)
+    avg_rating_received = Column(Float)
+    
+    # Computed at
+    last_updated = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_user_ml_features_user', 'user_id'),
+        Index('idx_user_ml_features_trust', 'trust_score'),
+        Index('idx_user_ml_features_tier', 'reward_tier'),
+        Index('idx_user_ml_features_nft', 'nft_badge_type'),
+    )
+
+
+class EventMLFeatures(Base):
+    """
+    Pre-computed ML features for events.
+    """
+    __tablename__ = "event_ml_features"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("events.id"), nullable=False, unique=True)
+    
+    # Capacity signals
+    capacity = Column(Integer)
+    current_rsvps = Column(Integer, default=0)
+    capacity_filled_percent = Column(Float, default=0.0)
+    
+    # Host signals
+    host_id = Column(Integer, ForeignKey("users.id"))
+    host_tier = Column(String(20))  # Bronze, Silver, Gold
+    host_nft_badge = Column(String(50))
+    host_reliability_score = Column(Float, default=0.5)
+    host_avg_rating = Column(Float)
+    host_total_events = Column(Integer, default=0)
+    
+    # Pricing signals
+    is_paid = Column(Boolean, default=False)
+    price = Column(Float)
+    price_mode = Column(String(20))  # free, paid, pay_in_person
+    dynamic_price_suggested = Column(Float)
+    
+    # Attendance forecast
+    predicted_attendance = Column(Integer)
+    predicted_no_show_rate = Column(Float)
+    verified_attendance_required = Column(Boolean, default=True)
+    
+    # Time signals
+    hours_until_event = Column(Float)
+    day_of_week = Column(Integer)
+    is_weekend = Column(Boolean, default=False)
+    
+    last_updated = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_event_ml_features_event', 'event_id'),
+        Index('idx_event_ml_features_host', 'host_id'),
+    )
+
+
+# ============================================================
+# AI OPS MONITORING
+# ============================================================
+
+class AIMetrics(Base):
+    """AI/ML system metrics for monitoring and alerting"""
+    __tablename__ = "ai_metrics"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    metric_name = Column(String(100), nullable=False)
+    metric_value = Column(Float, nullable=False)
+    metric_type = Column(String(50), nullable=False)  # gauge, counter, histogram
+    labels = Column(JSONB)  # {"model": "no_show", "environment": "prod"}
+    timestamp = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_ai_metrics_name', 'metric_name'),
+        Index('idx_ai_metrics_time', 'timestamp'),
+    )
+
+
+class ModelDriftLog(Base):
+    """Logs for detecting model drift"""
+    __tablename__ = "model_drift_log"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    model_name = Column(String(100), nullable=False)
+    model_version = Column(String(50))
+    
+    # Drift metrics
+    feature_drift_score = Column(Float)
+    prediction_drift_score = Column(Float)
+    accuracy_current = Column(Float)
+    accuracy_baseline = Column(Float)
+    
+    # Thresholds
+    drift_detected = Column(Boolean, default=False)
+    alert_triggered = Column(Boolean, default=False)
+    
+    # Window
+    window_start = Column(DateTime)
+    window_end = Column(DateTime)
+    sample_size = Column(Integer)
+    
+    created_at = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_model_drift_model', 'model_name'),
+        Index('idx_model_drift_detected', 'drift_detected'),
+    )
+

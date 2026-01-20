@@ -1,20 +1,35 @@
 """
 Rewards Service - Handles reward calculations and coupon management
+
+ENHANCED: Now requires VERIFIED attendance for rewards.
+Only check-ins validated through AttendanceVerificationService count toward tiers.
+
+Tier Requirements (30-day rolling window):
+- Bronze: 1 verified event (attended OR hosted)
+- Silver: 3 verified events
+- Gold: 4 verified events (stackable - multiple Gold coupons possible)
 """
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_
 from kumele_ai.db.models import (
-    User, UserActivity, RewardCoupon, Event, UserEvent
+    User, UserActivity, RewardCoupon, Event, UserEvent,
+    CheckIn, AttendanceVerification, UserMLFeatures, NFTBadge
 )
 
 logger = logging.getLogger(__name__)
 
 
 class RewardsService:
-    """Service for managing user rewards and coupons"""
+    """
+    Service for managing user rewards and coupons.
+    
+    IMPORTANT: Only VERIFIED attendance counts toward rewards.
+    - Attendees must have a valid CheckIn record (is_valid=True)
+    - Hosts must have at least one verified attendee for their events
+    """
     
     # Reward tier thresholds
     BRONZE_THRESHOLD = 1
@@ -25,6 +40,13 @@ class RewardsService:
     BRONZE_DISCOUNT = 0  # No discount
     SILVER_DISCOUNT = 4  # 4%
     GOLD_DISCOUNT = 8    # 8%
+    
+    # NFT Badge integration thresholds
+    NFT_BRONZE_THRESHOLD = 5     # 5 verified events
+    NFT_SILVER_THRESHOLD = 15    # 15 verified events
+    NFT_GOLD_THRESHOLD = 30      # 30 verified events
+    NFT_PLATINUM_THRESHOLD = 50  # 50 verified events
+    NFT_LEGENDARY_THRESHOLD = 100  # 100 verified events
     
     def get_user_activities_last_30_days(
         self,
@@ -43,41 +65,70 @@ class RewardsService:
         
         return activities
     
+    def count_verified_events(
+        self,
+        db: Session,
+        user_id: int,
+        days: int = 30
+    ) -> Dict[str, int]:
+        """
+        Count VERIFIED events (attended + hosted) in specified window.
+        
+        VERIFIED means:
+        - Attended: Has a valid CheckIn record (is_valid=True)
+        - Hosted: Event completed AND has at least one verified attendee
+        """
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        
+        # Count events attended WITH VERIFIED CHECK-IN
+        verified_attended = db.query(func.count(CheckIn.id)).join(Event).filter(
+            and_(
+                CheckIn.user_id == user_id,
+                CheckIn.is_valid == True,
+                Event.status == "completed",
+                CheckIn.check_in_time >= cutoff_date
+            )
+        ).scalar() or 0
+        
+        # Count events hosted with at least one verified attendee
+        hosted_with_verified = db.query(func.count(Event.id)).filter(
+            and_(
+                Event.host_id == user_id,
+                Event.status == "completed",
+                Event.event_date >= cutoff_date,
+                Event.id.in_(
+                    db.query(CheckIn.event_id).filter(
+                        CheckIn.is_valid == True
+                    ).distinct()
+                )
+            )
+        ).scalar() or 0
+        
+        return {
+            "verified_attended": verified_attended,
+            "verified_hosted": hosted_with_verified,
+            "total_verified": verified_attended + hosted_with_verified,
+            "window_days": days
+        }
+    
     def count_successful_events(
         self,
         db: Session,
         user_id: int
     ) -> Dict[str, int]:
-        """Count successful events (attended + hosted) in last 30 days"""
-        cutoff_date = datetime.utcnow() - timedelta(days=30)
-        
-        # Count events attended (checked in)
-        attended_count = db.query(func.count(UserEvent.id)).join(Event).filter(
-            and_(
-                UserEvent.user_id == user_id,
-                UserEvent.checked_in == True,
-                Event.status == "completed",
-                Event.event_date >= cutoff_date
-            )
-        ).scalar() or 0
-        
-        # Count events created and completed
-        created_count = db.query(func.count(Event.id)).filter(
-            and_(
-                Event.host_id == user_id,
-                Event.status == "completed",
-                Event.event_date >= cutoff_date
-            )
-        ).scalar() or 0
-        
+        """
+        DEPRECATED: Use count_verified_events instead.
+        Kept for backward compatibility but now calls verified method.
+        """
+        verified = self.count_verified_events(db, user_id, days=30)
         return {
-            "attended": attended_count,
-            "created": created_count,
-            "total": attended_count + created_count
+            "attended": verified["verified_attended"],
+            "created": verified["verified_hosted"],
+            "total": verified["total_verified"]
         }
     
     def calculate_tier(self, total_events: int) -> str:
-        """Calculate reward tier based on total events"""
+        """Calculate reward tier based on total VERIFIED events"""
         if total_events >= self.GOLD_THRESHOLD:
             return "Gold"
         elif total_events >= self.SILVER_THRESHOLD:
@@ -85,6 +136,24 @@ class RewardsService:
         elif total_events >= self.BRONZE_THRESHOLD:
             return "Bronze"
         return "None"
+    
+    def calculate_nft_badge_tier(self, total_lifetime_events: int) -> Optional[str]:
+        """
+        Calculate NFT badge tier based on LIFETIME verified events.
+        
+        Returns badge type or None if not qualified.
+        """
+        if total_lifetime_events >= self.NFT_LEGENDARY_THRESHOLD:
+            return "Legendary"
+        elif total_lifetime_events >= self.NFT_PLATINUM_THRESHOLD:
+            return "Platinum"
+        elif total_lifetime_events >= self.NFT_GOLD_THRESHOLD:
+            return "Gold"
+        elif total_lifetime_events >= self.NFT_SILVER_THRESHOLD:
+            return "Silver"
+        elif total_lifetime_events >= self.NFT_BRONZE_THRESHOLD:
+            return "Bronze"
+        return None
     
     def calculate_gold_count(self, total_events: int) -> int:
         """Calculate how many Gold rewards user qualifies for"""
@@ -280,8 +349,8 @@ class RewardsService:
     
     def _check_and_issue_rewards(self, db: Session, user_id: int):
         """Check if user qualifies for any new rewards and issue them"""
-        event_counts = self.count_successful_events(db, user_id)
-        total_events = event_counts["total"]
+        event_counts = self.count_verified_events(db, user_id, days=30)
+        total_events = event_counts["total_verified"]
         
         # Check for Bronze
         if total_events >= self.BRONZE_THRESHOLD:
@@ -311,6 +380,206 @@ class RewardsService:
         while existing_gold < gold_count:
             self.issue_coupon(db, user_id, "Gold")
             existing_gold += 1
+        
+        # Check for NFT badge upgrade (lifetime total)
+        self._check_and_issue_nft_badge(db, user_id)
+    
+    # ============================================================
+    # NFT BADGE MANAGEMENT
+    # ============================================================
+    
+    def _check_and_issue_nft_badge(self, db: Session, user_id: int):
+        """
+        Check if user qualifies for NFT badge upgrade.
+        Uses LIFETIME verified events, not 30-day window.
+        """
+        # Get lifetime verified events
+        lifetime = self.count_verified_events(db, user_id, days=3650)  # ~10 years
+        total_lifetime = lifetime["total_verified"]
+        
+        # Determine qualified badge tier
+        new_badge_type = self.calculate_nft_badge_tier(total_lifetime)
+        
+        if not new_badge_type:
+            return  # Not qualified for any badge yet
+        
+        # Check current badge
+        current_badge = db.query(NFTBadge).filter(
+            and_(
+                NFTBadge.user_id == user_id,
+                NFTBadge.is_active == True
+            )
+        ).order_by(NFTBadge.level.desc()).first()
+        
+        # Badge tier hierarchy
+        tier_levels = {
+            "Bronze": 1,
+            "Silver": 2,
+            "Gold": 3,
+            "Platinum": 4,
+            "Legendary": 5
+        }
+        
+        new_level = tier_levels.get(new_badge_type, 0)
+        current_level = tier_levels.get(current_badge.badge_type, 0) if current_badge else 0
+        
+        if new_level > current_level:
+            # Issue new badge
+            self.issue_nft_badge(db, user_id, new_badge_type, total_lifetime)
+    
+    def issue_nft_badge(
+        self,
+        db: Session,
+        user_id: int,
+        badge_type: str,
+        total_events: int
+    ) -> Optional[NFTBadge]:
+        """
+        Issue or upgrade NFT badge for user.
+        
+        Trust boost and discount values:
+        - Bronze: 0.02 trust, 2% discount
+        - Silver: 0.05 trust, 5% discount
+        - Gold: 0.08 trust, 8% discount
+        - Platinum: 0.12 trust, 12% discount
+        - Legendary: 0.20 trust, 15% discount, priority matching
+        """
+        tier_config = {
+            "Bronze": {"trust_boost": 0.02, "discount": 2.0, "priority": False},
+            "Silver": {"trust_boost": 0.05, "discount": 5.0, "priority": False},
+            "Gold": {"trust_boost": 0.08, "discount": 8.0, "priority": False},
+            "Platinum": {"trust_boost": 0.12, "discount": 12.0, "priority": True},
+            "Legendary": {"trust_boost": 0.20, "discount": 15.0, "priority": True},
+        }
+        
+        config = tier_config.get(badge_type)
+        if not config:
+            return None
+        
+        # Deactivate old badge if exists
+        db.query(NFTBadge).filter(
+            and_(
+                NFTBadge.user_id == user_id,
+                NFTBadge.is_active == True
+            )
+        ).update({"is_active": False})
+        
+        # Calculate level (1 XP per verified event, 10 XP per level)
+        level = min(total_events // 10, 10)  # Cap at level 10
+        xp = total_events
+        
+        # Create new badge
+        badge = NFTBadge(
+            user_id=user_id,
+            badge_type=badge_type,
+            level=level,
+            experience_points=xp,
+            trust_boost=config["trust_boost"],
+            price_discount_percent=config["discount"],
+            priority_matching=config["priority"],
+            earned_reason=f"Achieved {total_events} verified events",
+            is_active=True
+        )
+        
+        db.add(badge)
+        db.commit()
+        db.refresh(badge)
+        
+        # Update user ML features
+        self._update_user_ml_features(db, user_id, badge)
+        
+        logger.info(f"Issued {badge_type} NFT badge to user {user_id}")
+        return badge
+    
+    def _update_user_ml_features(
+        self,
+        db: Session,
+        user_id: int,
+        badge: Optional[NFTBadge] = None
+    ):
+        """Update UserMLFeatures after reward changes"""
+        user_ml = db.query(UserMLFeatures).filter(
+            UserMLFeatures.user_id == user_id
+        ).first()
+        
+        if not user_ml:
+            user_ml = UserMLFeatures(user_id=user_id)
+            db.add(user_ml)
+        
+        # Update from 30-day verified events
+        counts_30 = self.count_verified_events(db, user_id, days=30)
+        counts_90 = self.count_verified_events(db, user_id, days=90)
+        
+        user_ml.verified_attendance_30d = counts_30["total_verified"]
+        user_ml.verified_attendance_90d = counts_90["total_verified"]
+        user_ml.reward_tier = self.calculate_tier(counts_30["total_verified"])
+        
+        if badge:
+            user_ml.nft_badge_type = badge.badge_type
+            user_ml.nft_badge_level = badge.level
+            user_ml.nft_trust_boost = badge.trust_boost
+        
+        user_ml.last_updated = datetime.utcnow()
+        db.commit()
+    
+    def get_nft_badge_status(
+        self,
+        db: Session,
+        user_id: int
+    ) -> Dict[str, Any]:
+        """Get user's current NFT badge status and progress"""
+        # Get current badge
+        badge = db.query(NFTBadge).filter(
+            and_(
+                NFTBadge.user_id == user_id,
+                NFTBadge.is_active == True
+            )
+        ).first()
+        
+        # Get lifetime verified events
+        lifetime = self.count_verified_events(db, user_id, days=3650)
+        total = lifetime["total_verified"]
+        
+        # Calculate progress to next badge
+        next_badge = None
+        events_needed = 0
+        
+        if total < self.NFT_BRONZE_THRESHOLD:
+            next_badge = "Bronze"
+            events_needed = self.NFT_BRONZE_THRESHOLD - total
+        elif total < self.NFT_SILVER_THRESHOLD:
+            next_badge = "Silver"
+            events_needed = self.NFT_SILVER_THRESHOLD - total
+        elif total < self.NFT_GOLD_THRESHOLD:
+            next_badge = "Gold"
+            events_needed = self.NFT_GOLD_THRESHOLD - total
+        elif total < self.NFT_PLATINUM_THRESHOLD:
+            next_badge = "Platinum"
+            events_needed = self.NFT_PLATINUM_THRESHOLD - total
+        elif total < self.NFT_LEGENDARY_THRESHOLD:
+            next_badge = "Legendary"
+            events_needed = self.NFT_LEGENDARY_THRESHOLD - total
+        else:
+            next_badge = "MAX"
+            events_needed = 0
+        
+        return {
+            "user_id": user_id,
+            "current_badge": {
+                "type": badge.badge_type if badge else None,
+                "level": badge.level if badge else 0,
+                "experience_points": badge.experience_points if badge else 0,
+                "trust_boost": badge.trust_boost if badge else 0,
+                "discount_percent": badge.price_discount_percent if badge else 0,
+                "priority_matching": badge.priority_matching if badge else False,
+                "earned_at": badge.earned_at.isoformat() if badge else None
+            } if badge else None,
+            "lifetime_verified_events": total,
+            "next_badge": {
+                "type": next_badge,
+                "events_needed": events_needed
+            }
+        }
 
 
 # Singleton instance

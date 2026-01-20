@@ -25,7 +25,9 @@ from kumele_ai.api import (
     pricing,
     discount,
     taxonomy,
-    i18n
+    i18n,
+    checkin,
+    ai_ops
 )
 from kumele_ai.models.registry import model_registry
 
@@ -90,6 +92,9 @@ app.include_router(pricing.router, prefix="/pricing", tags=["Pricing"])
 app.include_router(discount.router, prefix="/discount", tags=["Discount"])
 app.include_router(taxonomy.router, tags=["Taxonomy"])
 app.include_router(i18n.router, tags=["i18n"])
+# NEW: Check-in and AI Ops routers
+app.include_router(checkin.router, tags=["Check-in"])
+app.include_router(ai_ops.router, tags=["AI-Ops"])
 
 
 @app.get("/")

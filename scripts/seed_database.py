@@ -195,6 +195,16 @@ def seed_database(
             print("Clearing existing data...")
             # Order matters due to foreign keys - child tables first
             tables_to_clear = [
+                # AI Ops Monitoring (new)
+                "model_drift_log", "ai_metrics",
+                # ML Features (new)
+                "event_ml_features", "user_ml_features",
+                # Temp Chat System (new)
+                "temp_chat_participants", "temp_chat_messages", "temp_chats",
+                # NFT Badge System (new)
+                "nft_badge_history", "nft_badges",
+                # Check-in System (new)
+                "checkins",
                 # No-show / Attendance
                 "no_show_predictions", "user_attendance_profile", "event_category_noshow_stats",
                 "attendance_verifications", "qr_scan_log", "device_fingerprints", "user_trust_profile",
@@ -857,6 +867,385 @@ def seed_database(
         print(f"  Created {trust_count} trust profiles")
         
         # =====================================================================
+        # 20. Seed Check-ins (for attendance verification)
+        # =====================================================================
+        print("\n20. Seeding check-ins...")
+        checkin_count = 0
+        checkin_modes = ["host_qr", "self_check"]
+        reason_codes = ["success", "gps_verified", "host_confirmed", "gps_mismatch", "time_window_expired"]
+        
+        for event in random.sample(events, min(num_events // 2, len(events))):
+            if event.status != "completed":
+                continue
+            
+            event_attendees = [ue for ue in db.query(models.UserEvent).filter_by(event_id=event.id).all()]
+            
+            for ue in event_attendees[:random.randint(1, min(10, len(event_attendees) + 1))]:
+                mode = random.choice(checkin_modes)
+                is_valid = random.random() > 0.1  # 90% valid check-ins
+                
+                checkin = models.CheckIn(
+                    event_id=event.id,
+                    user_id=ue.user_id,
+                    mode=mode,
+                    is_valid=is_valid,
+                    distance_km=random.uniform(0.1, 5.0) if mode == "self_check" else None,
+                    risk_score=random.uniform(0.0, 0.3) if is_valid else random.uniform(0.5, 0.9),
+                    reason_code=random.choice(reason_codes[:3]) if is_valid else random.choice(reason_codes[3:]),
+                    user_latitude=event.latitude + random.uniform(-0.01, 0.01) if event.latitude else None,
+                    user_longitude=event.longitude + random.uniform(-0.01, 0.01) if event.longitude else None,
+                    qr_code_hash=generate_device_fingerprint() if mode == "host_qr" else None,
+                    device_hash=generate_device_fingerprint(),
+                    host_confirmed=mode == "host_qr" and is_valid,
+                    check_in_time=event.start_time + timedelta(minutes=random.randint(-15, 30)),
+                    event_start_time=event.start_time,
+                    minutes_from_start=random.uniform(-15, 30),
+                )
+                db.add(checkin)
+                checkin_count += 1
+        
+        db.commit()
+        print(f"  Created {checkin_count} check-ins")
+        
+        # =====================================================================
+        # 21. Seed NFT Badges (for trust & reputation)
+        # =====================================================================
+        print("\n21. Seeding NFT badges...")
+        badge_count = 0
+        badge_types = [
+            {"type": "Bronze", "trust_boost": 0.02, "discount": 2.0, "priority": False},
+            {"type": "Silver", "trust_boost": 0.05, "discount": 5.0, "priority": False},
+            {"type": "Gold", "trust_boost": 0.10, "discount": 10.0, "priority": True},
+            {"type": "Platinum", "trust_boost": 0.15, "discount": 15.0, "priority": True},
+            {"type": "Legendary", "trust_boost": 0.20, "discount": 20.0, "priority": True},
+        ]
+        earned_reasons = ["attendance_milestone", "host_excellence", "community_leader", "early_adopter", "perfect_attendance"]
+        
+        nft_badges = []
+        for user in random.sample(users, min(num_users // 4, len(users))):
+            badge_info = random.choices(
+                badge_types,
+                weights=[40, 30, 20, 8, 2]  # Rarity distribution
+            )[0]
+            
+            nft_badge = models.NFTBadge(
+                user_id=user.id,
+                badge_type=badge_info["type"],
+                token_id=f"0x{random.randint(100000, 999999):06x}",
+                contract_address=f"0x{random.randint(1000000000, 9999999999):010x}",
+                chain=random.choice(["polygon", "ethereum"]),
+                earned_reason=random.choice(earned_reasons),
+                experience_points=random.randint(100, 10000),
+                level=random.randint(1, 10),
+                trust_boost=badge_info["trust_boost"],
+                price_discount_percent=badge_info["discount"],
+                priority_matching=badge_info["priority"],
+                is_active=True,
+            )
+            db.add(nft_badge)
+            nft_badges.append(nft_badge)
+            badge_count += 1
+        
+        db.commit()
+        for badge in nft_badges:
+            db.refresh(badge)
+        print(f"  Created {badge_count} NFT badges")
+        
+        # =====================================================================
+        # 22. Seed NFT Badge History (for audit trail)
+        # =====================================================================
+        print("\n22. Seeding NFT badge history...")
+        history_count = 0
+        badge_actions = ["minted", "upgraded", "xp_gained"]
+        
+        for badge in nft_badges:
+            # Minted event
+            history = models.NFTBadgeHistory(
+                badge_id=badge.id,
+                user_id=badge.user_id,
+                action="minted",
+                old_level=None,
+                new_level=1,
+                old_xp=None,
+                new_xp=0,
+                reason="Initial badge issuance",
+            )
+            db.add(history)
+            history_count += 1
+            
+            # Random upgrade events
+            if badge.level > 1:
+                for lvl in range(2, badge.level + 1):
+                    history = models.NFTBadgeHistory(
+                        badge_id=badge.id,
+                        user_id=badge.user_id,
+                        action="upgraded",
+                        old_level=lvl - 1,
+                        new_level=lvl,
+                        old_xp=random.randint(100, 500) * (lvl - 1),
+                        new_xp=random.randint(100, 500) * lvl,
+                        reason="Level milestone reached",
+                    )
+                    db.add(history)
+                    history_count += 1
+        
+        db.commit()
+        print(f"  Created {history_count} badge history entries")
+        
+        # =====================================================================
+        # 23. Seed Temp Chats (for event communication)
+        # =====================================================================
+        print("\n23. Seeding temp chats...")
+        chat_count = 0
+        temp_chats = []
+        chat_statuses = ["active", "expired", "closed"]
+        
+        for event in random.sample(events, min(num_events // 3, len(events))):
+            expires_at = event.start_time + timedelta(hours=24) if event.start_time else datetime.utcnow() + timedelta(hours=24)
+            is_expired = expires_at < datetime.utcnow()
+            
+            temp_chat = models.TempChat(
+                event_id=event.id,
+                chat_type="event",
+                status="expired" if is_expired else random.choice(["active", "active", "closed"]),
+                expires_at=expires_at,
+                closed_at=datetime.utcnow() if is_expired else None,
+                close_reason="expired" if is_expired else None,
+                message_count=random.randint(5, 100),
+                active_participants=random.randint(2, 15),
+                avg_messages_per_hour=random.uniform(0.5, 10.0),
+                toxic_message_count=random.randint(0, 3),
+                moderation_flags=random.randint(0, 2),
+                is_suspended=False,
+            )
+            db.add(temp_chat)
+            temp_chats.append(temp_chat)
+            chat_count += 1
+        
+        db.commit()
+        for chat in temp_chats:
+            db.refresh(chat)
+        print(f"  Created {chat_count} temp chats")
+        
+        # =====================================================================
+        # 24. Seed Temp Chat Messages
+        # =====================================================================
+        print("\n24. Seeding temp chat messages...")
+        message_count = 0
+        sample_messages = [
+            "Looking forward to this event!",
+            "What should I bring?",
+            "Is parking available?",
+            "Can someone share directions?",
+            "Just arrived!",
+            "This is going to be great!",
+            "Thanks for hosting!",
+            "Running a bit late, see you soon!",
+            "Had a great time, thanks everyone!",
+            "When does it start?",
+        ]
+        
+        for chat in temp_chats:
+            num_messages = random.randint(3, 20)
+            chat_users = random.sample(users, min(5, len(users)))
+            
+            for _ in range(num_messages):
+                msg = models.TempChatMessage(
+                    chat_id=chat.id,
+                    user_id=random.choice(chat_users).id,
+                    content=random.choice(sample_messages),
+                    is_moderated=random.random() < 0.1,
+                    moderation_status=random.choice(["approved", "approved", "flagged"]) if random.random() < 0.1 else "approved",
+                    toxicity_score=random.uniform(0.0, 0.3),
+                    is_deleted=False,
+                )
+                db.add(msg)
+                message_count += 1
+        
+        db.commit()
+        print(f"  Created {message_count} chat messages")
+        
+        # =====================================================================
+        # 25. Seed Temp Chat Participants
+        # =====================================================================
+        print("\n25. Seeding temp chat participants...")
+        participant_count = 0
+        
+        for chat in temp_chats:
+            event = next((e for e in events if e.id == chat.event_id), None)
+            if not event:
+                continue
+            
+            # Add host as participant
+            participant = models.TempChatParticipant(
+                chat_id=chat.id,
+                user_id=event.host_id,
+                role="host",
+                is_active=chat.status == "active",
+                message_count=random.randint(1, 15),
+            )
+            db.add(participant)
+            participant_count += 1
+            
+            # Add some attendees
+            chat_attendees = random.sample(users, min(random.randint(2, 10), len(users)))
+            for user in chat_attendees:
+                if user.id == event.host_id:
+                    continue
+                participant = models.TempChatParticipant(
+                    chat_id=chat.id,
+                    user_id=user.id,
+                    role="attendee",
+                    is_active=random.random() > 0.2,
+                    message_count=random.randint(0, 10),
+                )
+                db.add(participant)
+                participant_count += 1
+        
+        db.commit()
+        print(f"  Created {participant_count} chat participants")
+        
+        # =====================================================================
+        # 26. Seed User ML Features
+        # =====================================================================
+        print("\n26. Seeding user ML features...")
+        user_ml_count = 0
+        reward_tiers = ["None", "Bronze", "Silver", "Gold"]
+        nft_badge_types_list = [None, "Bronze", "Silver", "Gold", "Platinum", "Legendary"]
+        
+        for user in users:
+            user_ml = models.UserMLFeatures(
+                user_id=user.id,
+                verified_attendance_30d=random.randint(0, 10),
+                verified_attendance_90d=random.randint(0, 25),
+                attendance_rate_30d=random.uniform(0.6, 1.0),
+                attendance_rate_90d=random.uniform(0.7, 1.0),
+                no_show_rate_30d=random.uniform(0.0, 0.2),
+                no_show_rate_90d=random.uniform(0.0, 0.15),
+                reward_tier=random.choices(reward_tiers, weights=[40, 30, 20, 10])[0],
+                total_rewards_earned=random.randint(0, 20),
+                coupons_available=random.randint(0, 5),
+                nft_badge_type=random.choices(nft_badge_types_list, weights=[50, 20, 15, 10, 4, 1])[0],
+                nft_badge_level=random.randint(0, 5),
+                nft_trust_boost=random.uniform(0.0, 0.15),
+                payment_method_mix={"stripe": 0.6, "paypal": 0.3, "web3": 0.1},
+                avg_payment_time_minutes=random.uniform(5, 120),
+                payment_timeout_rate=random.uniform(0.0, 0.1),
+                payment_failure_rate=random.uniform(0.0, 0.05),
+                trust_score=random.uniform(0.7, 1.0),
+                fraud_flag_count=0 if random.random() > 0.05 else random.randint(1, 3),
+                events_attended_total=random.randint(0, 50),
+                events_hosted_total=random.randint(0, 10) if user in hosts else 0,
+                avg_rating_given=random.uniform(3.5, 5.0),
+                avg_rating_received=random.uniform(3.5, 5.0),
+            )
+            db.add(user_ml)
+            user_ml_count += 1
+        
+        db.commit()
+        print(f"  Created {user_ml_count} user ML feature records")
+        
+        # =====================================================================
+        # 27. Seed Event ML Features
+        # =====================================================================
+        print("\n27. Seeding event ML features...")
+        event_ml_count = 0
+        host_tiers = ["Bronze", "Silver", "Gold"]
+        
+        for event in events:
+            host_badge = next((b for b in nft_badges if b.user_id == event.host_id), None)
+            
+            event_ml = models.EventMLFeatures(
+                event_id=event.id,
+                capacity=event.max_attendees or random.randint(10, 100),
+                current_rsvps=random.randint(0, event.max_attendees or 50),
+                capacity_filled_percent=random.uniform(0.2, 1.0),
+                host_id=event.host_id,
+                host_tier=random.choice(host_tiers),
+                host_nft_badge=host_badge.badge_type if host_badge else None,
+                host_reliability_score=random.uniform(0.6, 1.0),
+                host_avg_rating=random.uniform(3.5, 5.0),
+                host_total_events=random.randint(1, 50),
+                is_paid=event.is_paid if hasattr(event, 'is_paid') else random.random() > 0.5,
+                price=float(event.ticket_price) if event.ticket_price else None,
+                price_mode=random.choice(["free", "paid", "pay_in_person"]),
+                dynamic_price_suggested=float(event.ticket_price) * random.uniform(0.8, 1.2) if event.ticket_price else None,
+                predicted_attendance=random.randint(5, event.max_attendees or 50),
+                predicted_no_show_rate=random.uniform(0.05, 0.25),
+                verified_attendance_required=random.random() > 0.3,
+                hours_until_event=random.uniform(-48, 168),
+                day_of_week=event.start_time.weekday() if event.start_time else random.randint(0, 6),
+                is_weekend=event.start_time.weekday() >= 5 if event.start_time else random.random() > 0.7,
+            )
+            db.add(event_ml)
+            event_ml_count += 1
+        
+        db.commit()
+        print(f"  Created {event_ml_count} event ML feature records")
+        
+        # =====================================================================
+        # 28. Seed AI Metrics (for monitoring)
+        # =====================================================================
+        print("\n28. Seeding AI metrics...")
+        ai_metrics_count = 0
+        metric_definitions = [
+            ("model.inference_latency_ms", "gauge", {"model": "no_show_predictor"}),
+            ("model.prediction_count", "counter", {"model": "no_show_predictor"}),
+            ("model.accuracy", "gauge", {"model": "no_show_predictor"}),
+            ("model.inference_latency_ms", "gauge", {"model": "pricing_engine"}),
+            ("model.prediction_count", "counter", {"model": "pricing_engine"}),
+            ("matching.score_computation_ms", "gauge", {"service": "matching"}),
+            ("matching.matches_per_request", "histogram", {"service": "matching"}),
+            ("checkin.risk_score_avg", "gauge", {"service": "checkin"}),
+            ("checkin.validation_count", "counter", {"service": "checkin"}),
+        ]
+        
+        for _ in range(100):  # 100 metric samples
+            metric_name, metric_type, labels = random.choice(metric_definitions)
+            
+            ai_metric = models.AIMetrics(
+                metric_name=metric_name,
+                metric_value=random.uniform(10, 500) if "latency" in metric_name else random.uniform(0.5, 1.0) if "accuracy" in metric_name else random.randint(1, 1000),
+                metric_type=metric_type,
+                labels=labels,
+                timestamp=datetime.utcnow() - timedelta(hours=random.randint(0, 48)),
+            )
+            db.add(ai_metric)
+            ai_metrics_count += 1
+        
+        db.commit()
+        print(f"  Created {ai_metrics_count} AI metrics")
+        
+        # =====================================================================
+        # 29. Seed Model Drift Logs
+        # =====================================================================
+        print("\n29. Seeding model drift logs...")
+        drift_count = 0
+        model_names = ["no_show_predictor", "pricing_engine", "matching_scorer", "fraud_detector"]
+        
+        for _ in range(20):  # 20 drift check logs
+            drift_detected = random.random() < 0.1  # 10% chance of drift
+            
+            drift_log = models.ModelDriftLog(
+                model_name=random.choice(model_names),
+                model_version=f"v{random.randint(1, 5)}.{random.randint(0, 9)}.{random.randint(0, 99)}",
+                feature_drift_score=random.uniform(0.0, 0.5),
+                prediction_drift_score=random.uniform(0.0, 0.4),
+                accuracy_current=random.uniform(0.75, 0.95),
+                accuracy_baseline=random.uniform(0.80, 0.92),
+                drift_detected=drift_detected,
+                alert_triggered=drift_detected and random.random() > 0.5,
+                window_start=datetime.utcnow() - timedelta(days=7),
+                window_end=datetime.utcnow(),
+                sample_size=random.randint(1000, 50000),
+            )
+            db.add(drift_log)
+            drift_count += 1
+        
+        db.commit()
+        print(f"  Created {drift_count} model drift logs")
+        
+        # =====================================================================
         # Summary
         # =====================================================================
         print("\n" + "=" * 60)
@@ -873,6 +1262,16 @@ def seed_database(
         print(f"  Timeseries: {daily_count} daily, {hourly_count} hourly")
         print(f"  Attendance Profiles: {profile_count}")
         print(f"  Trust Profiles: {trust_count}")
+        print(f"  Check-ins: {checkin_count}")
+        print(f"  NFT Badges: {badge_count}")
+        print(f"  Badge History: {history_count}")
+        print(f"  Temp Chats: {chat_count}")
+        print(f"  Chat Messages: {message_count}")
+        print(f"  Chat Participants: {participant_count}")
+        print(f"  User ML Features: {user_ml_count}")
+        print(f"  Event ML Features: {event_ml_count}")
+        print(f"  AI Metrics: {ai_metrics_count}")
+        print(f"  Model Drift Logs: {drift_count}")
         print()
         
     except Exception as e:

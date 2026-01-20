@@ -1,5 +1,11 @@
 """
-Pricing Service - Handles dynamic pricing and discount optimization
+Pricing Service - Dynamic Pricing Optimization Engine
+
+Enhanced with:
+- No-Show Probability Integration: Adjust prices based on predicted attendance
+- Host Tier Influence: Premium hosts can command higher prices
+- Verified Attendance Integration: Discount for verified attendees
+- NFT Badge Discounts: Badge holders get automatic discounts
 """
 import logging
 from typing import Dict, Any, List, Optional
@@ -13,14 +19,62 @@ from sklearn.ensemble import RandomForestRegressor
 
 from kumele_ai.db.models import (
     Event, PricingHistory, DiscountSuggestion, UserEvent, 
-    RewardCoupon, User, HostRating
+    RewardCoupon, User, HostRating,
+    UserMLFeatures, NFTBadge, EventMLFeatures, CheckIn
 )
 
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# PRICING CONFIGURATION
+# ============================================================
+
+PRICING_CONFIG = {
+    # Base pricing tiers
+    "min_price": 5.0,
+    "max_price": 500.0,
+    "default_price": 25.0,
+    
+    # Host tier price multipliers
+    "host_tier_multipliers": {
+        "Bronze": 1.0,
+        "Silver": 1.10,
+        "Gold": 1.25,
+    },
+    
+    # No-show adjustments
+    "no_show_overbooking_thresholds": {
+        0.10: 1.05,  # 10% no-show → overbook by 5%
+        0.20: 1.10,  # 20% no-show → overbook by 10%
+        0.30: 1.15,  # 30% no-show → overbook by 15%
+        0.40: 1.20,  # 40% no-show → overbook by 20%
+    },
+    
+    # NFT badge discounts
+    "nft_badge_discounts": {
+        "Bronze": 0.02,      # 2% discount
+        "Silver": 0.05,      # 5% discount
+        "Gold": 0.08,        # 8% discount
+        "Platinum": 0.12,    # 12% discount
+        "Legendary": 0.15,   # 15% discount
+    },
+    
+    # Verified attendance discount
+    "verified_attendance_discount": 0.05,  # 5% for verified attendees
+}
+
+
 class PricingService:
-    """Service for dynamic pricing and discount optimization"""
+    """
+    Service for dynamic pricing and discount optimization.
+    
+    Integrates:
+    - No-show probability for overbooking calculations
+    - Host tier influence on pricing power
+    - NFT badge holder discounts
+    - Verified attendance discounts
+    """
     
     def __init__(self):
         self._price_model = None
@@ -264,6 +318,247 @@ class PricingService:
                 "suggestions": [],
                 "error": str(e)
             }
+
+    # ============================================================
+    # NEW: NO-SHOW PROBABILITY INTEGRATION
+    # ============================================================
+    
+    def calculate_overbooking_factor(
+        self,
+        predicted_no_show_rate: float
+    ) -> float:
+        """
+        Calculate overbooking factor based on predicted no-show rate.
+        
+        Returns multiplier for capacity (e.g., 1.10 = overbook by 10%)
+        """
+        for threshold, factor in sorted(
+            PRICING_CONFIG["no_show_overbooking_thresholds"].items(),
+            reverse=True
+        ):
+            if predicted_no_show_rate >= threshold:
+                return factor
+        return 1.0  # No overbooking if low no-show rate
+    
+    def adjust_price_for_no_show_risk(
+        self,
+        base_price: float,
+        predicted_no_show_rate: float
+    ) -> Dict[str, Any]:
+        """
+        Adjust pricing based on predicted no-show rate.
+        
+        Higher no-show rates may warrant:
+        - Slight price reduction (to fill more seats)
+        - Or overbooking (to compensate for expected drops)
+        """
+        overbooking_factor = self.calculate_overbooking_factor(predicted_no_show_rate)
+        
+        # Price adjustment: higher no-show = slight discount to ensure fills
+        if predicted_no_show_rate >= 0.3:
+            price_adjustment = 0.95  # 5% discount
+        elif predicted_no_show_rate >= 0.2:
+            price_adjustment = 0.97  # 3% discount
+        else:
+            price_adjustment = 1.0  # No adjustment
+        
+        return {
+            "adjusted_price": round(base_price * price_adjustment, 2),
+            "overbooking_factor": overbooking_factor,
+            "predicted_no_show_rate": predicted_no_show_rate,
+            "price_adjustment_percent": round((1 - price_adjustment) * 100, 1)
+        }
+    
+    # ============================================================
+    # NEW: HOST TIER PRICING INFLUENCE
+    # ============================================================
+    
+    def get_host_tier_multiplier(
+        self,
+        db: Session,
+        host_id: int
+    ) -> Dict[str, Any]:
+        """
+        Get pricing power multiplier based on host tier.
+        
+        Premium hosts can command higher prices:
+        - Bronze: 1.0x (base)
+        - Silver: 1.10x (10% premium)
+        - Gold: 1.25x (25% premium)
+        """
+        host_ml = db.query(UserMLFeatures).filter(
+            UserMLFeatures.user_id == host_id
+        ).first()
+        
+        tier = "None"
+        if host_ml and host_ml.reward_tier:
+            tier = host_ml.reward_tier
+        
+        multiplier = PRICING_CONFIG["host_tier_multipliers"].get(tier, 1.0)
+        
+        # Also check host ratings
+        avg_rating = db.query(func.avg(HostRating.overall_rating)).filter(
+            HostRating.host_id == host_id
+        ).scalar() or 3.0
+        
+        # Rating bonus: 4.5+ gets 5% extra
+        rating_bonus = 1.05 if avg_rating >= 4.5 else 1.0
+        
+        return {
+            "tier": tier,
+            "tier_multiplier": multiplier,
+            "avg_rating": round(float(avg_rating), 2),
+            "rating_bonus": rating_bonus,
+            "total_multiplier": round(multiplier * rating_bonus, 3)
+        }
+    
+    # ============================================================
+    # NEW: USER-SPECIFIC PRICING (NFT + VERIFIED ATTENDANCE)
+    # ============================================================
+    
+    def calculate_user_discounts(
+        self,
+        db: Session,
+        user_id: int,
+        base_price: float
+    ) -> Dict[str, Any]:
+        """
+        Calculate user-specific discounts based on:
+        - NFT badge level
+        - Verified attendance history
+        """
+        discounts = []
+        total_discount = 0.0
+        
+        # Check NFT badge
+        badge = db.query(NFTBadge).filter(
+            and_(
+                NFTBadge.user_id == user_id,
+                NFTBadge.is_active == True
+            )
+        ).order_by(NFTBadge.level.desc()).first()
+        
+        if badge:
+            nft_discount = PRICING_CONFIG["nft_badge_discounts"].get(
+                badge.badge_type, 0.0
+            )
+            if nft_discount > 0:
+                discounts.append({
+                    "type": "nft_badge",
+                    "reason": f"{badge.badge_type} Badge Holder",
+                    "discount_percent": round(nft_discount * 100, 1)
+                })
+                total_discount += nft_discount
+        
+        # Check verified attendance history
+        user_ml = db.query(UserMLFeatures).filter(
+            UserMLFeatures.user_id == user_id
+        ).first()
+        
+        if user_ml and user_ml.attendance_rate_90d and user_ml.attendance_rate_90d >= 0.9:
+            verified_discount = PRICING_CONFIG["verified_attendance_discount"]
+            discounts.append({
+                "type": "verified_attendance",
+                "reason": "Verified Attendance (90%+ rate)",
+                "discount_percent": round(verified_discount * 100, 1)
+            })
+            total_discount += verified_discount
+        
+        # Calculate final price
+        final_price = base_price * (1 - total_discount)
+        
+        return {
+            "base_price": base_price,
+            "discounts": discounts,
+            "total_discount_percent": round(total_discount * 100, 1),
+            "final_price": round(final_price, 2)
+        }
+    
+    # ============================================================
+    # NEW: ENHANCED PRICING OPTIMIZATION
+    # ============================================================
+    
+    def optimize_pricing_enhanced(
+        self,
+        db: Session,
+        event_id: int,
+        host_id: int,
+        category: Optional[str] = None,
+        city: Optional[str] = None,
+        capacity: int = 50,
+        day_of_week: Optional[int] = None,
+        predicted_no_show_rate: float = 0.15
+    ) -> Dict[str, Any]:
+        """
+        Enhanced pricing optimization with all factors:
+        - Base pricing from historical data
+        - Host tier multiplier
+        - No-show rate adjustment
+        - Recommended user discounts
+        """
+        # Get base optimized price
+        base_result = self.optimize_pricing(
+            db=db,
+            category=category,
+            city=city,
+            capacity=capacity,
+            day_of_week=day_of_week
+        )
+        
+        base_price = base_result.get("optimal_price", PRICING_CONFIG["default_price"])
+        
+        # Apply host tier multiplier
+        host_multiplier = self.get_host_tier_multiplier(db, host_id)
+        price_with_host = base_price * host_multiplier["total_multiplier"]
+        
+        # Adjust for no-show risk
+        no_show_adjustment = self.adjust_price_for_no_show_risk(
+            price_with_host, predicted_no_show_rate
+        )
+        
+        # Final recommended price
+        final_price = no_show_adjustment["adjusted_price"]
+        
+        # Clamp to min/max
+        final_price = max(
+            PRICING_CONFIG["min_price"],
+            min(final_price, PRICING_CONFIG["max_price"])
+        )
+        
+        # Store enhanced pricing in DB
+        pricing_record = PricingHistory(
+            event_id=event_id,
+            price=final_price,
+            demand_score=base_result.get("historical_metrics", {}).get("avg_turnout", 0) / capacity,
+            category=category,
+            city=city,
+            capacity=capacity,
+            day_of_week=day_of_week
+        )
+        db.add(pricing_record)
+        db.commit()
+        
+        return {
+            "event_id": event_id,
+            "recommended_price": round(final_price, 2),
+            "pricing_breakdown": {
+                "base_price": round(base_price, 2),
+                "host_tier": host_multiplier["tier"],
+                "host_multiplier": host_multiplier["total_multiplier"],
+                "price_after_host": round(price_with_host, 2),
+                "no_show_adjustment": no_show_adjustment,
+                "final_price": round(final_price, 2)
+            },
+            "overbooking_recommendation": {
+                "base_capacity": capacity,
+                "overbooking_factor": no_show_adjustment["overbooking_factor"],
+                "adjusted_capacity": int(capacity * no_show_adjustment["overbooking_factor"]),
+                "reason": f"Predicted {round(predicted_no_show_rate * 100, 1)}% no-show rate"
+            },
+            "nft_discount_tiers": PRICING_CONFIG["nft_badge_discounts"],
+            "model": "enhanced",
+            "base_analysis": base_result
+        }
 
 
 # Singleton instance
