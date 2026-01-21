@@ -5,11 +5,19 @@ Provides:
 - POST /checkin/validate: Validate attendance check-in (host_qr or self_check)
 - GET /checkin/{event_id}/status: Get check-in status for an event
 - GET /checkin/user/{user_id}/history: Get user's check-in history
+- POST /checkin/qr/generate: Generate QR code for user/event
+- GET /checkin/qr/{qr_token}: Validate QR token
+- POST /checkin/qr/refresh: Refresh expired QR code
 """
 import logging
+import hashlib
+import secrets
+import base64
+import io
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
@@ -23,6 +31,15 @@ from kumele_ai.services.attendance_verification_service import attendance_verifi
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/checkin", tags=["Check-in"])
+
+# Try to import qrcode library, use fallback if not available
+try:
+    import qrcode
+    from qrcode.image.pure import PyPNGImage
+    QR_LIBRARY_AVAILABLE = True
+except ImportError:
+    QR_LIBRARY_AVAILABLE = False
+    logger.warning("qrcode library not installed. QR image generation will return base64 placeholder.")
 
 
 # ============================================================
@@ -82,6 +99,599 @@ class EventCheckInStatus(BaseModel):
     suspicious_check_ins: int
     check_in_rate: float
     by_mode: dict
+
+
+# ============================================================
+# QR CODE GENERATION MODELS
+# ============================================================
+
+class QRCodeGenerateRequest(BaseModel):
+    """Request to generate a QR code for check-in"""
+    user_id: int = Field(..., description="User ID for whom QR is generated")
+    event_id: int = Field(..., description="Event ID for check-in")
+    validity_minutes: int = Field(default=30, ge=5, le=1440, description="QR validity in minutes (5-1440)")
+    include_device_binding: bool = Field(default=False, description="Bind QR to specific device")
+    device_hash: Optional[str] = Field(None, description="Device hash for binding")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": 1,
+                "event_id": 1,
+                "validity_minutes": 30
+            }
+        }
+
+
+class QRCodeResponse(BaseModel):
+    """Response containing generated QR code"""
+    qr_token: str = Field(..., description="Unique QR token for check-in")
+    qr_data: str = Field(..., description="Full QR payload (JSON-encoded)")
+    qr_image_base64: Optional[str] = Field(None, description="Base64-encoded PNG image")
+    expires_at: datetime = Field(..., description="When the QR expires")
+    user_id: int
+    event_id: int
+    is_device_bound: bool = False
+    scan_url: Optional[str] = Field(None, description="URL to scan for check-in")
+
+
+class QRCodeValidateRequest(BaseModel):
+    """Request to validate a QR token"""
+    qr_token: str = Field(..., description="QR token to validate")
+    scanner_id: Optional[int] = Field(None, description="ID of host scanning")
+    device_hash: Optional[str] = Field(None, description="Device hash of scanner")
+
+
+class QRCodeValidateResponse(BaseModel):
+    """Response from QR validation"""
+    is_valid: bool
+    user_id: Optional[int] = None
+    event_id: Optional[int] = None
+    user_name: Optional[str] = None
+    event_title: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    status: str  # "valid", "expired", "already_used", "invalid", "device_mismatch"
+    message: str
+    can_check_in: bool = False
+
+
+class QRCodeRefreshRequest(BaseModel):
+    """Request to refresh an expired QR code"""
+    user_id: int = Field(..., description="User ID")
+    event_id: int = Field(..., description="Event ID")
+    old_token: Optional[str] = Field(None, description="Old QR token to invalidate")
+    validity_minutes: int = Field(default=30, ge=5, le=1440)
+
+
+class QRCodeBatchRequest(BaseModel):
+    """Request to generate QR codes for multiple users"""
+    event_id: int = Field(..., description="Event ID")
+    user_ids: List[int] = Field(..., description="List of user IDs")
+    validity_minutes: int = Field(default=60)
+
+
+class QRCodeBatchResponse(BaseModel):
+    """Response for batch QR generation"""
+    event_id: int
+    generated_count: int
+    failed_count: int
+    qr_codes: List[QRCodeResponse]
+    failed_user_ids: List[int]
+
+
+# In-memory QR token store (in production, use Redis)
+# Format: {token: {user_id, event_id, expires_at, device_hash, used}}
+_qr_token_store: dict = {}
+
+
+def _generate_qr_token(user_id: int, event_id: int) -> str:
+    """Generate a secure unique QR token"""
+    random_part = secrets.token_urlsafe(16)
+    timestamp = int(datetime.utcnow().timestamp())
+    raw = f"{user_id}:{event_id}:{timestamp}:{random_part}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _create_qr_payload(token: str, user_id: int, event_id: int, expires_at: datetime) -> str:
+    """Create JSON payload for QR code"""
+    import json
+    payload = {
+        "t": token,  # token
+        "u": user_id,  # user_id
+        "e": event_id,  # event_id
+        "x": int(expires_at.timestamp()),  # expires_at timestamp
+        "v": 1  # version
+    }
+    return json.dumps(payload, separators=(',', ':'))
+
+
+def _generate_qr_image_base64(data: str) -> Optional[str]:
+    """Generate QR code image as base64 PNG"""
+    if not QR_LIBRARY_AVAILABLE:
+        # Return a placeholder or None
+        return None
+    
+    try:
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Convert to base64
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        
+        return img_base64
+    except Exception as e:
+        logger.error(f"Failed to generate QR image: {e}")
+        return None
+
+
+# ============================================================
+# QR CODE GENERATION ENDPOINTS
+# ============================================================
+
+@router.post("/qr/generate", response_model=QRCodeResponse)
+async def generate_qr_code(
+    request: QRCodeGenerateRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate a QR code for event check-in.
+    
+    The QR code contains:
+    - Unique token
+    - User ID
+    - Event ID
+    - Expiration timestamp
+    
+    Can optionally be bound to a specific device for extra security.
+    """
+    # Verify user exists
+    user = db.query(User).filter(User.id == request.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify event exists and is upcoming
+    event = db.query(Event).filter(Event.id == request.event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Check user is registered for event
+    registration = db.query(UserEvent).filter(
+        and_(
+            UserEvent.user_id == request.user_id,
+            UserEvent.event_id == request.event_id,
+            UserEvent.rsvp_status.in_(["registered", "confirmed", "attended"])
+        )
+    ).first()
+    
+    if not registration:
+        raise HTTPException(
+            status_code=400, 
+            detail="User is not registered for this event"
+        )
+    
+    # Generate token
+    token = _generate_qr_token(request.user_id, request.event_id)
+    expires_at = datetime.utcnow() + timedelta(minutes=request.validity_minutes)
+    
+    # Store token
+    _qr_token_store[token] = {
+        "user_id": request.user_id,
+        "event_id": request.event_id,
+        "expires_at": expires_at,
+        "device_hash": request.device_hash if request.include_device_binding else None,
+        "used": False,
+        "created_at": datetime.utcnow()
+    }
+    
+    # Create QR payload
+    qr_data = _create_qr_payload(token, request.user_id, request.event_id, expires_at)
+    
+    # Generate image
+    qr_image = _generate_qr_image_base64(qr_data)
+    
+    # Build scan URL
+    scan_url = f"/checkin/qr/{token}"
+    
+    logger.info(f"Generated QR for user {request.user_id}, event {request.event_id}, expires {expires_at}")
+    
+    return QRCodeResponse(
+        qr_token=token,
+        qr_data=qr_data,
+        qr_image_base64=qr_image,
+        expires_at=expires_at,
+        user_id=request.user_id,
+        event_id=request.event_id,
+        is_device_bound=request.include_device_binding,
+        scan_url=scan_url
+    )
+
+
+@router.get("/qr/{qr_token}", response_model=QRCodeValidateResponse)
+async def validate_qr_token(
+    qr_token: str,
+    scanner_id: Optional[int] = Query(None, description="Host ID scanning"),
+    device_hash: Optional[str] = Query(None, description="Device hash"),
+    db: Session = Depends(get_db)
+):
+    """
+    Validate a QR token and return user/event details.
+    
+    Used by hosts when scanning attendee QR codes.
+    Returns user info and whether check-in can proceed.
+    """
+    # Check token exists
+    token_data = _qr_token_store.get(qr_token)
+    
+    if not token_data:
+        return QRCodeValidateResponse(
+            is_valid=False,
+            status="invalid",
+            message="QR code is invalid or not found",
+            can_check_in=False
+        )
+    
+    # Check if already used
+    if token_data.get("used"):
+        return QRCodeValidateResponse(
+            is_valid=False,
+            user_id=token_data["user_id"],
+            event_id=token_data["event_id"],
+            status="already_used",
+            message="This QR code has already been used for check-in",
+            can_check_in=False
+        )
+    
+    # Check expiration
+    if datetime.utcnow() > token_data["expires_at"]:
+        return QRCodeValidateResponse(
+            is_valid=False,
+            user_id=token_data["user_id"],
+            event_id=token_data["event_id"],
+            expires_at=token_data["expires_at"],
+            status="expired",
+            message="QR code has expired. Please generate a new one.",
+            can_check_in=False
+        )
+    
+    # Check device binding
+    if token_data.get("device_hash") and device_hash:
+        if token_data["device_hash"] != device_hash:
+            return QRCodeValidateResponse(
+                is_valid=False,
+                user_id=token_data["user_id"],
+                event_id=token_data["event_id"],
+                status="device_mismatch",
+                message="QR code is bound to a different device",
+                can_check_in=False
+            )
+    
+    # Get user and event details
+    user = db.query(User).filter(User.id == token_data["user_id"]).first()
+    event = db.query(Event).filter(Event.id == token_data["event_id"]).first()
+    
+    return QRCodeValidateResponse(
+        is_valid=True,
+        user_id=token_data["user_id"],
+        event_id=token_data["event_id"],
+        user_name=user.username if user else None,
+        event_title=event.title if event else None,
+        expires_at=token_data["expires_at"],
+        status="valid",
+        message="QR code is valid. Ready for check-in.",
+        can_check_in=True
+    )
+
+
+@router.post("/qr/{qr_token}/use")
+async def use_qr_token(
+    qr_token: str,
+    scanner_id: int = Query(..., description="Host ID performing check-in"),
+    db: Session = Depends(get_db)
+):
+    """
+    Mark a QR token as used and perform the check-in.
+    
+    This endpoint should be called after validate to actually perform check-in.
+    """
+    token_data = _qr_token_store.get(qr_token)
+    
+    if not token_data:
+        raise HTTPException(status_code=404, detail="QR token not found")
+    
+    if token_data.get("used"):
+        raise HTTPException(status_code=400, detail="QR token already used")
+    
+    if datetime.utcnow() > token_data["expires_at"]:
+        raise HTTPException(status_code=400, detail="QR token expired")
+    
+    # Verify scanner is the event host
+    event = db.query(Event).filter(Event.id == token_data["event_id"]).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    if event.host_id != scanner_id:
+        # Check if scanner is authorized (could be co-host)
+        logger.warning(f"Non-host {scanner_id} attempting check-in for event {event.id}")
+    
+    # Mark token as used
+    _qr_token_store[qr_token]["used"] = True
+    _qr_token_store[qr_token]["used_at"] = datetime.utcnow()
+    _qr_token_store[qr_token]["used_by"] = scanner_id
+    
+    # Log QR scan
+    qr_log = QRScanLog(
+        event_id=token_data["event_id"],
+        qr_code_hash=hashlib.sha256(qr_token.encode()).hexdigest(),
+        user_id=token_data["user_id"],
+        scanned_at=datetime.utcnow(),
+        is_valid=True
+    )
+    db.add(qr_log)
+    
+    # Create check-in record
+    checkin = CheckIn(
+        event_id=token_data["event_id"],
+        user_id=token_data["user_id"],
+        mode="host_qr",
+        is_valid=True,
+        qr_code_hash=qr_token,
+        host_confirmed=True,
+        check_in_time=datetime.utcnow(),
+        event_start_time=event.start_time,
+        risk_score=0.0,
+        reason_code="qr_verified"
+    )
+    db.add(checkin)
+    
+    # Update user_event
+    user_event = db.query(UserEvent).filter(
+        and_(
+            UserEvent.user_id == token_data["user_id"],
+            UserEvent.event_id == token_data["event_id"]
+        )
+    ).first()
+    
+    if user_event:
+        user_event.checked_in = True
+        user_event.check_in_time = datetime.utcnow()
+        user_event.rsvp_status = "attended"
+    
+    db.commit()
+    
+    logger.info(f"QR check-in completed: user {token_data['user_id']} at event {token_data['event_id']}")
+    
+    return {
+        "success": True,
+        "message": "Check-in successful",
+        "user_id": token_data["user_id"],
+        "event_id": token_data["event_id"],
+        "check_in_time": datetime.utcnow().isoformat()
+    }
+
+
+@router.post("/qr/refresh", response_model=QRCodeResponse)
+async def refresh_qr_code(
+    request: QRCodeRefreshRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Refresh/regenerate a QR code.
+    
+    Invalidates the old token (if provided) and generates a new one.
+    Useful when the previous QR has expired.
+    """
+    # Invalidate old token if provided
+    if request.old_token and request.old_token in _qr_token_store:
+        del _qr_token_store[request.old_token]
+        logger.info(f"Invalidated old QR token for user {request.user_id}")
+    
+    # Generate new QR using the main generate endpoint logic
+    generate_request = QRCodeGenerateRequest(
+        user_id=request.user_id,
+        event_id=request.event_id,
+        validity_minutes=request.validity_minutes
+    )
+    
+    return await generate_qr_code(generate_request, db)
+
+
+@router.post("/qr/batch", response_model=QRCodeBatchResponse)
+async def generate_batch_qr_codes(
+    request: QRCodeBatchRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate QR codes for multiple users for an event.
+    
+    Useful for hosts to pre-generate QR codes for all attendees.
+    Returns list of generated QR codes and any failures.
+    """
+    # Verify event exists
+    event = db.query(Event).filter(Event.id == request.event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    generated = []
+    failed = []
+    
+    for user_id in request.user_ids:
+        try:
+            # Check user is registered
+            registration = db.query(UserEvent).filter(
+                and_(
+                    UserEvent.user_id == user_id,
+                    UserEvent.event_id == request.event_id
+                )
+            ).first()
+            
+            if not registration:
+                failed.append(user_id)
+                continue
+            
+            # Generate token
+            token = _generate_qr_token(user_id, request.event_id)
+            expires_at = datetime.utcnow() + timedelta(minutes=request.validity_minutes)
+            
+            _qr_token_store[token] = {
+                "user_id": user_id,
+                "event_id": request.event_id,
+                "expires_at": expires_at,
+                "device_hash": None,
+                "used": False,
+                "created_at": datetime.utcnow()
+            }
+            
+            qr_data = _create_qr_payload(token, user_id, request.event_id, expires_at)
+            qr_image = _generate_qr_image_base64(qr_data)
+            
+            generated.append(QRCodeResponse(
+                qr_token=token,
+                qr_data=qr_data,
+                qr_image_base64=qr_image,
+                expires_at=expires_at,
+                user_id=user_id,
+                event_id=request.event_id,
+                is_device_bound=False,
+                scan_url=f"/checkin/qr/{token}"
+            ))
+            
+        except Exception as e:
+            logger.error(f"Failed to generate QR for user {user_id}: {e}")
+            failed.append(user_id)
+    
+    return QRCodeBatchResponse(
+        event_id=request.event_id,
+        generated_count=len(generated),
+        failed_count=len(failed),
+        qr_codes=generated,
+        failed_user_ids=failed
+    )
+
+
+@router.get("/qr/{qr_token}/image")
+async def get_qr_image(
+    qr_token: str,
+    size: int = Query(default=300, ge=100, le=1000, description="Image size in pixels")
+):
+    """
+    Get QR code as PNG image.
+    
+    Returns the QR code image directly (Content-Type: image/png).
+    """
+    if not QR_LIBRARY_AVAILABLE:
+        raise HTTPException(
+            status_code=503, 
+            detail="QR code generation not available. Install 'qrcode' package."
+        )
+    
+    token_data = _qr_token_store.get(qr_token)
+    if not token_data:
+        raise HTTPException(status_code=404, detail="QR token not found")
+    
+    qr_data = _create_qr_payload(
+        qr_token, 
+        token_data["user_id"], 
+        token_data["event_id"], 
+        token_data["expires_at"]
+    )
+    
+    try:
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=size // 30,
+            border=4,
+        )
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+        
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        
+        return Response(
+            content=buffer.getvalue(),
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f"inline; filename=qr_{qr_token[:8]}.png"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate QR image: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate QR image")
+
+
+@router.delete("/qr/{qr_token}")
+async def revoke_qr_token(
+    qr_token: str,
+    user_id: int = Query(..., description="User ID (must match token owner)")
+):
+    """
+    Revoke/invalidate a QR token.
+    
+    Useful if user loses device or wants to regenerate.
+    Only the token owner can revoke it.
+    """
+    token_data = _qr_token_store.get(qr_token)
+    
+    if not token_data:
+        raise HTTPException(status_code=404, detail="QR token not found")
+    
+    if token_data["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to revoke this token")
+    
+    del _qr_token_store[qr_token]
+    
+    return {
+        "success": True,
+        "message": "QR token revoked successfully"
+    }
+
+
+@router.get("/qr/user/{user_id}/active")
+async def get_user_active_qr_codes(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get all active (non-expired, non-used) QR codes for a user.
+    """
+    active_tokens = []
+    now = datetime.utcnow()
+    
+    for token, data in _qr_token_store.items():
+        if (data["user_id"] == user_id and 
+            not data.get("used") and 
+            data["expires_at"] > now):
+            
+            event = db.query(Event).filter(Event.id == data["event_id"]).first()
+            
+            active_tokens.append({
+                "qr_token": token,
+                "event_id": data["event_id"],
+                "event_title": event.title if event else None,
+                "expires_at": data["expires_at"].isoformat(),
+                "is_device_bound": data.get("device_hash") is not None
+            })
+    
+    return {
+        "user_id": user_id,
+        "active_count": len(active_tokens),
+        "qr_codes": active_tokens
+    }
 
 
 # ============================================================

@@ -91,6 +91,66 @@ curl -X POST http://localhost:8000/checkin/fraud-detect \
 curl http://localhost:8000/checkin/host/1/compliance
 ```
 
+### 2.5. QR Code Generation API
+
+#### Generate QR Code
+```bash
+curl -X POST http://localhost:8000/checkin/qr/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 1,
+    "event_id": 1,
+    "validity_minutes": 30
+  }'
+```
+
+#### Validate QR Token
+```bash
+curl "http://localhost:8000/checkin/qr/YOUR_QR_TOKEN?scanner_id=1"
+```
+
+#### Use QR Token (Perform Check-in)
+```bash
+curl -X POST "http://localhost:8000/checkin/qr/YOUR_QR_TOKEN/use?scanner_id=1"
+```
+
+#### Get QR Image
+```bash
+curl "http://localhost:8000/checkin/qr/YOUR_QR_TOKEN/image" --output qr.png
+```
+
+#### Refresh QR Code
+```bash
+curl -X POST http://localhost:8000/checkin/qr/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 1,
+    "event_id": 1,
+    "validity_minutes": 60
+  }'
+```
+
+#### Batch Generate QR Codes
+```bash
+curl -X POST http://localhost:8000/checkin/qr/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": 1,
+    "user_ids": [1, 2, 3, 4, 5],
+    "validity_minutes": 60
+  }'
+```
+
+#### Get User's Active QR Codes
+```bash
+curl http://localhost:8000/checkin/qr/user/1/active
+```
+
+#### Revoke QR Token
+```bash
+curl -X DELETE "http://localhost:8000/checkin/qr/YOUR_QR_TOKEN?user_id=1"
+```
+
 ### 3. NFT Badge API
 
 #### Check Eligibility
@@ -413,6 +473,14 @@ docker-compose exec api python scripts/seed_database.py --clear 2>&1 | tee seed.
 | | /checkin/verify | POST | Verify with geo/device |
 | | /checkin/fraud-detect | POST | Fraud detection |
 | | /checkin/host/{id}/compliance | GET | Host compliance rate |
+| **QR Code** | /checkin/qr/generate | POST | Generate QR code |
+| | /checkin/qr/{token} | GET | Validate QR token |
+| | /checkin/qr/{token}/use | POST | Use QR for check-in |
+| | /checkin/qr/{token}/image | GET | Get QR as PNG image |
+| | /checkin/qr/refresh | POST | Refresh expired QR |
+| | /checkin/qr/batch | POST | Generate batch QR codes |
+| | /checkin/qr/user/{id}/active | GET | Get user's active QRs |
+| | /checkin/qr/{token} | DELETE | Revoke QR token |
 | **NFT** | /nft/badge/eligibility/{id} | GET | Badge eligibility |
 | | /nft/badge/issue | POST | Issue badge |
 | | /nft/trust-score/{id} | GET | Trust score |

@@ -146,6 +146,59 @@ class APITester:
             expected_status=[200, 404])
         
         # =================================================================
+        # 2.5. QR Code API
+        # =================================================================
+        print("\n--- QR Code API ---")
+        
+        # Generate QR code
+        qr_response = self.request("POST", "/checkin/qr/generate", json={
+            "user_id": 1,
+            "event_id": 1,
+            "validity_minutes": 30
+        })
+        qr_token = None
+        if qr_response and qr_response.status_code == 200:
+            log_success("Generate QR code [200]")
+            self.results["passed"] += 1
+            try:
+                qr_token = qr_response.json().get("qr_token")
+            except:
+                pass
+        else:
+            status = qr_response.status_code if qr_response else "N/A"
+            if status in [400, 404]:
+                log_warning(f"Generate QR code [{status}] - User/Event not found (expected)")
+                self.results["passed"] += 1
+            else:
+                log_error(f"Generate QR code - Got {status}")
+                self.results["failed"] += 1
+        
+        # Test other QR endpoints with token or placeholder
+        test_token = qr_token or "test_token_placeholder"
+        
+        self.test_endpoint("Validate QR token", "GET", f"/checkin/qr/{test_token}",
+            expected_status=[200, 404])
+        
+        self.test_endpoint("Get user active QRs", "GET", "/checkin/qr/user/1/active",
+            expected_status=[200])
+        
+        self.test_endpoint("Refresh QR code", "POST", "/checkin/qr/refresh",
+            expected_status=[200, 400, 404],
+            json={
+                "user_id": 1,
+                "event_id": 1,
+                "validity_minutes": 60
+            })
+        
+        self.test_endpoint("Batch generate QR", "POST", "/checkin/qr/batch",
+            expected_status=[200, 400, 404],
+            json={
+                "event_id": 1,
+                "user_ids": [1, 2, 3],
+                "validity_minutes": 60
+            })
+        
+        # =================================================================
         # 3. NFT Badge API
         # =================================================================
         print("\n--- NFT Badge API ---")
