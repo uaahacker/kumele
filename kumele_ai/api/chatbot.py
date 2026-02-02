@@ -18,7 +18,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 import io
 
-from kumele_ai.dependencies import get_db, verify_api_key
+from kumele_ai.dependencies import get_db
 from kumele_ai.services.chatbot_service import chatbot_service
 from kumele_ai.db.models import KnowledgeDocument
 
@@ -124,8 +124,7 @@ async def chatbot_ask(
 @router.post("/sync")
 async def chatbot_sync(
     request: SyncRequest,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     Sync knowledge documents to Qdrant (INTERNAL/WEBHOOK).
@@ -190,8 +189,7 @@ async def list_knowledge_documents(
     language: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     List all knowledge documents.
@@ -229,8 +227,7 @@ async def list_knowledge_documents(
 @router.get("/knowledge/{document_id}", response_model=KnowledgeDocumentResponse)
 async def get_knowledge_document(
     document_id: int,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     Get a specific knowledge document by ID.
@@ -258,8 +255,7 @@ async def get_knowledge_document(
 async def create_knowledge_document(
     document: KnowledgeDocumentCreate,
     auto_sync: bool = True,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     Create a new knowledge document.
@@ -326,8 +322,7 @@ async def update_knowledge_document(
     document_id: int,
     document: KnowledgeDocumentUpdate,
     auto_sync: bool = True,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     Update an existing knowledge document.
@@ -379,8 +374,7 @@ async def update_knowledge_document(
 @router.delete("/knowledge/{document_id}")
 async def delete_knowledge_document(
     document_id: int,
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     Delete a knowledge document.
@@ -411,8 +405,7 @@ async def upload_knowledge_document(
     category: str = Form("guidelines"),
     language: str = Form("en"),
     auto_sync: bool = Form(True),
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     Upload a PDF or text file as a knowledge document.
@@ -567,8 +560,7 @@ async def bulk_upload_documents(
     files: List[UploadFile] = File(...),
     category: str = Form("guidelines"),
     language: str = Form("en"),
-    db: Session = Depends(get_db),
-    api_key: str = Depends(verify_api_key)
+    db: Session = Depends(get_db)
 ):
     """
     Upload multiple PDF/text files at once.
