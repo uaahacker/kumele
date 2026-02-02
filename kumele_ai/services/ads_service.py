@@ -199,13 +199,20 @@ class AdsService:
             if image_tags and len(image_tags) >= 3:
                 base_ctr *= 1.15
             
-            # Historical comparison
-            historical_avg_ctr = db.query(
-                func.avg(
-                    func.count(AdInteraction.id).filter(AdInteraction.interaction_type == "click") /
-                    func.count(AdInteraction.id).filter(AdInteraction.interaction_type == "impression")
-                )
-            ).scalar() or 0.02
+            # Historical comparison - use simple query to avoid nested aggregate error
+            try:
+                # Count clicks and impressions separately
+                total_clicks = db.query(func.count(AdInteraction.id)).filter(
+                    AdInteraction.interaction_type == "click"
+                ).scalar() or 0
+                
+                total_impressions = db.query(func.count(AdInteraction.id)).filter(
+                    AdInteraction.interaction_type == "impression"
+                ).scalar() or 1  # Avoid division by zero
+                
+                historical_avg_ctr = total_clicks / total_impressions if total_impressions > 0 else 0.02
+            except Exception:
+                historical_avg_ctr = 0.02
             
             predicted_ctr = (base_ctr + historical_avg_ctr) / 2
             

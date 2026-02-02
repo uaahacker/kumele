@@ -56,28 +56,32 @@ class NLPService:
     ) -> Dict[str, Any]:
         """Extract keywords and entities from text"""
         try:
-            # Generate content ID if not provided
+            # Only use cache if content_id is explicitly provided
+            use_cache = content_id is not None
+            
+            # Generate content ID for storage if not provided
             if not content_id:
                 content_id = hashlib.sha256(text.encode()).hexdigest()[:16]
             
-            # Check for existing extraction
-            existing = db.query(NLPKeyword).filter(
-                NLPKeyword.content_id == content_id
-            ).all()
-            
-            if existing:
-                return {
-                    "content_id": content_id,
-                    "keywords": [
-                        {
-                            "keyword": k.keyword,
-                            "type": k.keyword_type,
-                            "score": k.score
-                        }
-                        for k in existing
-                    ],
-                    "cached": True
-                }
+            # Check for existing extraction only if caching is enabled
+            if use_cache:
+                existing = db.query(NLPKeyword).filter(
+                    NLPKeyword.content_id == content_id
+                ).all()
+                
+                if existing:
+                    return {
+                        "content_id": content_id,
+                        "keywords": [
+                            {
+                                "keyword": k.keyword,
+                                "type": k.keyword_type,
+                                "score": k.score
+                            }
+                            for k in existing
+                        ],
+                        "cached": True
+                    }
             
             # Tokenize
             tokens = self._simple_tokenize(text)

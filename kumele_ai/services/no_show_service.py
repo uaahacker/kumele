@@ -110,6 +110,9 @@ class NoShowService:
             # Calculate prediction
             no_show_prob, confidence = self._calculate_prediction(features)
             
+            # Generate top risk factors based on features
+            top_risk_factors = self._get_top_risk_factors(features)
+            
             # Log prediction for audit trail
             self._log_prediction(
                 db=db,
@@ -126,6 +129,7 @@ class NoShowService:
                 "confidence": round(confidence, 4),
                 "expected_show_probability": round(1 - no_show_prob, 4),
                 "features": features,
+                "top_risk_factors": top_risk_factors,
                 "model_version": MODEL_VERSION
             }
             
@@ -137,6 +141,7 @@ class NoShowService:
                 "confidence": 0.3,
                 "expected_show_probability": 0.75,
                 "features": {},
+                "top_risk_factors": [],
                 "model_version": MODEL_VERSION,
                 "error": str(e)
             }
@@ -270,6 +275,33 @@ class NoShowService:
                      completeness * 0.3)
         
         return no_show_prob, min(max(confidence, 0.1), 0.95)
+    
+    def _get_top_risk_factors(self, features: Dict[str, float]) -> List[str]:
+        """
+        Get top risk factors based on feature values.
+        Returns human-readable risk factor names.
+        """
+        risk_factors = []
+        
+        # Map features to human-readable risk factors
+        feature_to_risk = {
+            "user_no_show_rate": ("high_no_show_history", 0.3),
+            "user_is_new": ("new_user", 0.5),
+            "user_late_cancellation_rate": ("late_cancellation_history", 0.2),
+            "user_payment_failure_rate": ("payment_timeout", 0.1),
+            "distance_above_typical": ("high_distance", 0.3),
+            "event_is_free": ("free_event", 0.5),
+            "event_weekday_evening": ("weekday_evening", 0.5),
+            "host_low_reliability": ("low_host_rating", 0.5),
+            "hours_until_event_short": ("short_notice_rsvp", 0.5),
+            "payment_not_completed": ("payment_pending", 0.5),
+        }
+        
+        for feature_name, (risk_name, threshold) in feature_to_risk.items():
+            if features.get(feature_name, 0) >= threshold:
+                risk_factors.append(risk_name)
+        
+        return risk_factors[:5]  # Return top 5 risk factors
     
     def _get_user_attendance_profile(
         self,

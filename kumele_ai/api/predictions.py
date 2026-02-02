@@ -170,11 +170,12 @@ async def predict_event_noshow(
         result = no_show_service.predict(
             db=db,
             user_id=reg.user_id,
-            event_id=event_id
+            event_id=event_id,
+            context={}  # Empty context for aggregate prediction
         )
-        predictions.append(result["probability"])
-        if result.get("risk_factors"):
-            all_risk_factors.extend(result["risk_factors"])
+        predictions.append(result.get("no_show_probability", 0.2))
+        if result.get("top_risk_factors"):
+            all_risk_factors.extend(result["top_risk_factors"])
     
     # Aggregate metrics
     avg_probability = sum(predictions) / len(predictions)
@@ -237,10 +238,11 @@ async def predict_user_noshow(
     result = no_show_service.predict(
         db=db,
         user_id=request.user_id,
-        event_id=request.event_id
+        event_id=request.event_id,
+        context={}  # Empty context
     )
     
-    probability = result["probability"]
+    probability = result.get("no_show_probability", 0.2)
     
     # Risk level
     if probability < 0.10:
@@ -255,7 +257,7 @@ async def predict_user_noshow(
     # Generate recommendations
     recommendations = _generate_noshow_recommendations(
         probability, 
-        result.get("risk_factors", [])
+        result.get("top_risk_factors", [])
     )
     
     return NoShowPredictionResponse(
@@ -265,7 +267,7 @@ async def predict_user_noshow(
         risk_level=risk_level,
         confidence=result.get("confidence", 0.7),
         feature_contributions=result.get("features"),
-        top_risk_factors=result.get("risk_factors"),
+        top_risk_factors=result.get("top_risk_factors"),
         recommended_actions=recommendations
     )
 
