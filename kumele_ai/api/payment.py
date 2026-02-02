@@ -168,7 +168,10 @@ async def get_payment_window(window_id: int):
     """Get payment window status and time remaining"""
     window = _payment_windows.get(window_id)
     if not window:
-        raise HTTPException(status_code=404, detail="Payment window not found")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Payment window {window_id} not found. Windows are session-based and expire when server restarts. Create a new window with POST /payment/window/create"
+        )
     return window.to_dict()
 
 
@@ -185,7 +188,10 @@ async def extend_payment_window(
     """
     window = _payment_windows.get(window_id)
     if not window:
-        raise HTTPException(status_code=404, detail="Payment window not found")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Payment window {window_id} not found. Create a new window with POST /payment/window/create"
+        )
     
     if window.status != "pending":
         raise HTTPException(status_code=400, detail=f"Cannot extend {window.status} window")
@@ -213,7 +219,10 @@ async def complete_payment(window_id: int):
     """
     window = _payment_windows.get(window_id)
     if not window:
-        raise HTTPException(status_code=404, detail="Payment window not found")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Payment window {window_id} not found. Create a new window with POST /payment/window/create"
+        )
     
     if window.status != "pending":
         raise HTTPException(status_code=400, detail=f"Cannot complete {window.status} window")
@@ -236,7 +245,10 @@ async def cancel_payment(window_id: int):
     """Cancel a payment window (user chose not to pay)"""
     window = _payment_windows.get(window_id)
     if not window:
-        raise HTTPException(status_code=404, detail="Payment window not found")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Payment window {window_id} not found. Create a new window with POST /payment/window/create"
+        )
     
     if window.status != "pending":
         raise HTTPException(status_code=400, detail=f"Cannot cancel {window.status} window")
